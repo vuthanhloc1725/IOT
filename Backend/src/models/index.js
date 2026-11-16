@@ -52,6 +52,8 @@ UserDevice.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
 // Một node (ESP32) điều khiển nhiều thiết bị
 Node.hasMany(Device, { foreignKey: 'nodeId', as: 'devices', onDelete: 'RESTRICT' });
 Device.belongsTo(Node, { foreignKey: 'nodeId', as: 'node' });
+Device.hasOne(CameraToken, { foreignKey: 'deviceId', as: 'cameraToken', onDelete: 'CASCADE' });
+CameraToken.belongsTo(Device, { foreignKey: 'deviceId', as: 'camera', onDelete: 'CASCADE' });
 
 // Dữ liệu cảm biến
 Device.hasMany(SensorReading, { foreignKey: 'deviceId', as: 'readings', onDelete: 'CASCADE' });
@@ -89,8 +91,9 @@ Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments' });
 Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
 
 // ---------- Quan hệ: camera phone ----------
-CameraToken.hasMany(CameraMedia, { foreignKey: 'cameraId', sourceKey: 'cameraId', as: 'media' });
-CameraMedia.belongsTo(CameraToken, { foreignKey: 'cameraId', targetKey: 'cameraId', as: 'camera' });
+// Camera là Device type CAMERA; ảnh lưu đĩa (fallback khi chưa cấu hình AI/Cloudinary) gắn theo deviceCode.
+Device.hasMany(CameraMedia, { foreignKey: 'cameraId', sourceKey: 'deviceCode', as: 'cameraMedia', constraints: false });
+CameraMedia.belongsTo(Device, { foreignKey: 'cameraId', targetKey: 'deviceCode', as: 'camera', constraints: false });
 
 // ---------- Hàm tiện ích ----------
 async function connect() {

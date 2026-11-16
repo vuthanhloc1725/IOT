@@ -1,58 +1,12 @@
 /**
- * Camera service: tạo/thu hồi token, nhận media upload, phục vụ ảnh.
+ * Camera service (fallback lưu đĩa): nhận media upload, phục vụ ảnh.
+ * Token Camera do camera.controller quản lý (bảng cameraTokens, theo deviceId).
  */
 const crypto = require('node:crypto');
-const { CameraToken, CameraMedia } = require('../models');
+const { CameraMedia } = require('../models');
 const storage = require('./camera-media.storage');
 const ApiError = require('../utils/apiError');
 const env = require('../config/env');
-
-// ---- Token quản trị (admin dùng) ----
-
-/**
- * Tạo token mới cho 1 camera. Trả về token gốc (chỉ hiện 1 lần).
- */
-exports.createToken = async (cameraId, label) => {
-    cameraId = String(cameraId).trim();
-    if (!cameraId || cameraId.length > 60) throw ApiError.badRequest('cameraId phải từ 1–60 ký tự');
-
-    const existing = await CameraToken.unscoped().findOne({ where: { cameraId } });
-    if (existing) throw ApiError.conflict(`Camera ${cameraId} đã tồn tại`);
-
-    const raw = crypto.randomBytes(32);
-    const token = raw.toString('base64url');           // 43 chars
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-    const record = await CameraToken.create({ cameraId, tokenHash, label: label || null });
-    return { id: record.id, cameraId, token, label: record.label };
-};
-
-/**
- * Cấp lại token (huỷ token cũ, tạo mới).
- */
-exports.reissueToken = async (cameraId) => {
-    const record = await CameraToken.unscoped().findOne({ where: { cameraId } });
-    if (!record) throw ApiError.notFound(`Camera ${cameraId} không tồn tại`);
-
-    const raw = crypto.randomBytes(32);
-    const token = raw.toString('base64url');
-    record.tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    record.isActive = true;
-    await record.save();
-    return { id: record.id, cameraId, token, label: record.label };
-};
-
-/**
- * Vô hiệu hoá camera (token bị từ chối, media cũ giữ nguyên).
- */
-exports.deactivateToken = async (cameraId) => {
-    const record = await CameraToken.unscoped().findOne({ where: { cameraId } });
-    if (!record) throw ApiError.notFound(`Camera ${cameraId} không tồn tại`);
-    record.isActive = false;
-    await record.save();
-};
-
-exports.listTokens = () => CameraToken.findAll({ order: [['createdAt', 'DESC']] });
 
 // ---- Media upload (phone gọi) ----
 

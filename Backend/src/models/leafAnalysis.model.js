@@ -19,8 +19,14 @@ module.exports = (sequelize, DataTypes) =>
         },
       },
       boundingBoxes: { type: DataTypes.JSON, allowNull: true },
+      // Xác suất của toàn bộ lớp AI (label, label_vi, confidence, class_id).
+      predictions: { type: DataTypes.JSON, allowNull: true },
+      aiResult: { type: DataTypes.JSON, allowNull: true },
       // Chỉ lưu tên file ngẫu nhiên, không nhận đường dẫn tùy ý từ bản tin MQTT.
-      imagePath: { type: DataTypes.STRING(500), allowNull: true },
+      imagePath: { type: DataTypes.STRING(500), allowNull: true }, // legacy local file; giữ để đọc dữ liệu cũ
+      imageUrl: { type: DataTypes.STRING(1000), allowNull: true },
+      cloudinaryPublicId: { type: DataTypes.STRING(255), allowNull: true },
+      imageSha256: { type: DataTypes.CHAR(64), allowNull: true },
       modelVersion: { type: DataTypes.STRING(50), allowNull: false },
       inferenceMs: { type: DataTypes.INTEGER, allowNull: true },
       receivedAt: { type: DataTypes.DATE(3), allowNull: false, defaultValue: DataTypes.NOW },

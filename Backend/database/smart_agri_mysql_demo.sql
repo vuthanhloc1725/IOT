@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `fullName` VARCHAR(100) NOT NULL,
   `role` ENUM('admin','operator','viewer') NOT NULL DEFAULT 'viewer',
   `isActive` TINYINT(1) NOT NULL DEFAULT 1,
-  `lastLoginAt` DATETIME(3) NULL,
+  `lastLoginAt DATETIME(3) NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_username_unique` (`username`),
@@ -108,6 +108,42 @@ CREATE TABLE IF NOT EXISTS `devices` (
   CONSTRAINT `fk_devices_node` FOREIGN KEY (`nodeId`) REFERENCES `nodes` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 4A. CAMERA TOKENS -------------------------------------------------------
+-- Mỗi camera có một credential dài hạn; token thô chỉ hiển thị đúng một lần khi cấp.
+CREATE TABLE IF NOT EXISTS `cameraTokens` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `deviceId` INT NOT NULL,
+  `tokenHash` CHAR(64) NOT NULL,
+  `expiresAt` DATETIME(3) NULL,
+  `revokedAt` DATETIME(3) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `lastUsedAt` DATETIME(3) NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `cameraTokens_deviceId_unique` (`deviceId`),
+  UNIQUE KEY `cameraTokens_tokenHash_unique` (`tokenHash`),
+  CONSTRAINT `fk_cameraTokens_device` FOREIGN KEY (`deviceId`) REFERENCES `devices` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 4B. CAMERA MEDIA (fallback lưu đĩa khi chưa cấu hình AI + Cloudinary) ------
+-- camera_media.cameraId = devices.deviceCode của camera (type CAMERA, ví dụ CAM-001).
+CREATE TABLE IF NOT EXISTS `camera_media` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `eventId` VARCHAR(120) NOT NULL COMMENT 'Idempotency key từ phone agent',
+  `cameraId` VARCHAR(60) NOT NULL COMMENT 'devices.deviceCode của camera',
+  `requestId` VARCHAR(120) NULL COMMENT 'MQTT command requestId nếu có',
+  `mediaType` ENUM('image','video') NOT NULL DEFAULT 'image',
+  `mimeType` VARCHAR(60) NOT NULL,
+  `filename` VARCHAR(255) NOT NULL COMMENT 'Tên file trên disk (UUID + ext)',
+  `sizeBytes` INT UNSIGNED NOT NULL,
+  `sha256` CHAR(64) NOT NULL,
+  `capturedAt` DATETIME(3) NULL COMMENT 'Thời điểm chụp (do phone báo)',
+  `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `camera_media_eventId_unique` (`eventId`),
+  KEY `idx_camera_media_camera` (`cameraId`),
+  KEY `idx_camera_media_captured` (`capturedAt`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 5. USERS <-> DEVICES (phạm vi quyền truy cập) --------------------------
 CREATE TABLE IF NOT EXISTS `userDevices` (
   `userId` INT NOT NULL,
@@ -162,7 +198,12 @@ CREATE TABLE IF NOT EXISTS `leafAnalyses` (
   `diseaseId` INT NOT NULL,
   `confidence` DECIMAL(5,4) NOT NULL,
   `boundingBoxes` JSON NULL,
-  `imagePath` VARCHAR(500) NULL,
+  `predictions` JSON NULL,
+  `aiResult` JSON NULL,
+  `imagePath` VARCHAR(500) NULL COMMENT 'Legacy local image path; new images use Cloudinary',
+  `imageUrl` VARCHAR(1000) NULL,
+  `cloudinaryPublicId` VARCHAR(255) NULL,
+  `imageSha256` CHAR(64) NULL,
   `modelVersion` VARCHAR(50) NOT NULL,
   `inferenceMs` INT NULL,
   `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -259,8 +300,8 @@ INSERT INTO `users` (`id`,`username`,`email`,`passwordHash`,`fullName`,`role`,`i
 ON DUPLICATE KEY UPDATE `email`=VALUES(`email`),`passwordHash`=VALUES(`passwordHash`),`fullName`=VALUES(`fullName`),`role`=VALUES(`role`),`isActive`=VALUES(`isActive`),`lastLoginAt`=VALUES(`lastLoginAt`);
 
 INSERT INTO `nodes` (`id`,`nodeCode`,`name`,`firmwareVersion`,`hardwareVersion`,`isOnline`,`onlineSince`,`lastHeartbeatAt`,`heartbeatTimeoutSec`,`isRevoked`,`revokedAt`,`createdAt`) VALUES
-(1,'NODE-01','ESP32 Nhà kính A','v1.2.0','ESP32-WROOM-32',1,DATE_SUB(NOW(3),INTERVAL 40 MINUTE),NOW(3),3600,0,NULL,DATE_SUB(NOW(3),INTERVAL 50 DAY)),
-(2,'NODE-02','ESP32 Khu B','v1.1.4','ESP32-WROOM-32',0,NULL,DATE_SUB(NOW(3),INTERVAL 3 HOUR),60,0,NULL,DATE_SUB(NOW(3),INTERVAL 40 DAY))
+(1,'NODE-001','ESP32 Nhà kính A','v1.2.0','ESP32-WROOM-32',1,DATE_SUB(NOW(3),INTERVAL 40 MINUTE),NOW(3),3600,0,NULL,DATE_SUB(NOW(3),INTERVAL 50 DAY)),
+(2,'NODE-002','ESP32 Khu B','v1.1.4','ESP32-WROOM-32',0,NULL,DATE_SUB(NOW(3),INTERVAL 3 HOUR),60,0,NULL,DATE_SUB(NOW(3),INTERVAL 40 DAY))
 ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`firmwareVersion`=VALUES(`firmwareVersion`),`hardwareVersion`=VALUES(`hardwareVersion`),`isOnline`=VALUES(`isOnline`),`onlineSince`=VALUES(`onlineSince`),`lastHeartbeatAt`=VALUES(`lastHeartbeatAt`),`heartbeatTimeoutSec`=VALUES(`heartbeatTimeoutSec`),`isRevoked`=VALUES(`isRevoked`),`revokedAt`=VALUES(`revokedAt`);
 
 INSERT INTO `diseases` (`id`,`modelLabel`,`nameVi`,`nameEn`,`isHealthy`) VALUES
@@ -279,6 +320,12 @@ INSERT INTO `devices` (`id`,`deviceCode`,`name`,`type`,`location`,`nodeId`,`gpio
 (6,'DEV-006','Cảm biến cũ H1 (đã ngừng dùng)','SENSOR','Nhà kính A - Khu 1',1,NULL,'DECOMMISSIONED',0,NULL,DATE_SUB(NOW(3),INTERVAL 1 DAY),JSON_OBJECT(),0,0,DATE_SUB(NOW(3),INTERVAL 28 DAY)),
 (7,'DEV-007','Cảm biến đất S2','SENSOR','Nhà kính B - Khu 2',2,NULL,'MAINTENANCE',0,NULL,DATE_SUB(NOW(3),INTERVAL 25 DAY),JSON_OBJECT(),1,0,DATE_SUB(NOW(3),INTERVAL 25 DAY))
 ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`type`=VALUES(`type`),`location`=VALUES(`location`),`nodeId`=VALUES(`nodeId`),`gpioPin`=VALUES(`gpioPin`),`lifecycle`=VALUES(`lifecycle`),`isOn`=VALUES(`isOn`),`stateChangedAt`=VALUES(`stateChangedAt`),`lifecycleChangedAt`=VALUES(`lifecycleChangedAt`),`config`=VALUES(`config`),`configVersion`=VALUES(`configVersion`),`configAppliedVersion`=VALUES(`configAppliedVersion`);
+
+-- Camera gửi ảnh trực tiếp bằng HTTP POST /api/camera/media.
+-- Không seed token bí mật; Admin cấp token sau khi đăng nhập qua API.
+INSERT INTO `devices` (`id`,`deviceCode`,`name`,`type`,`location`,`nodeId`,`lifecycle`,`isOn`,`config`,`configVersion`,`configAppliedVersion`,`createdAt`) VALUES
+(8,'CAM-001','Camera điện thoại Nhà kính A','CAMERA','Nhà kính A - Khu 1',NULL,'REGISTERED',0,JSON_OBJECT('captureIntervalSeconds',60),0,0,NOW(3))
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`type`=VALUES(`type`),`location`=VALUES(`location`),`lifecycle`=VALUES(`lifecycle`),`config`=VALUES(`config`);
 
 INSERT INTO `userDevices` (`userId`,`deviceId`,`assignedAt`) VALUES
 (2,1,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,2,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,3,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,4,DATE_SUB(NOW(3),INTERVAL 30 DAY)),
@@ -322,16 +369,16 @@ INSERT INTO `treatments` (`id`,`diseaseId`,`deficiencyId`,`type`,`instructions`,
 (4,2,NULL,'CHEMICAL','DEMO: Bản ghi hóa học giả lập, không phải khuyến cáo nông học.', 'DEMO-ACTIVE-INGREDIENT','Không áp dụng — dữ liệu demo',7,'DEMO DATA ONLY — không phải phác đồ hóa học thực tế.')
 ON DUPLICATE KEY UPDATE `diseaseId`=VALUES(`diseaseId`),`type`=VALUES(`type`),`instructions`=VALUES(`instructions`),`activeIngredient`=VALUES(`activeIngredient`),`dosageText`=VALUES(`dosageText`),`intervalDays`=VALUES(`intervalDays`),`sourceReference`=VALUES(`sourceReference`);
 
-INSERT INTO `leafAnalyses` (`id`,`eventId`,`deviceId`,`capturedAt`,`diseaseId`,`confidence`,`boundingBoxes`,`imagePath`,`modelVersion`,`inferenceMs`,`receivedAt`) VALUES
-(1,'demo-ai-event-0001',NULL,DATE_SUB(NOW(3),INTERVAL 22 MINUTE),1,0.9300,JSON_ARRAY(JSON_OBJECT('x',0.22,'y',0.18,'width',0.47,'height',0.55)),'demo-late-blight.jpg','plant-ai-v3',241,DATE_SUB(NOW(3),INTERVAL 21 MINUTE)),
-(2,'demo-ai-event-0002',NULL,DATE_SUB(NOW(3),INTERVAL 48 MINUTE),2,0.8700,JSON_ARRAY(JSON_OBJECT('x',0.30,'y',0.24,'width',0.38,'height',0.41)),NULL,'plant-ai-v3',218,DATE_SUB(NOW(3),INTERVAL 47 MINUTE)),
-(3,'demo-ai-event-0003',NULL,DATE_SUB(NOW(3),INTERVAL 75 MINUTE),3,0.9850,NULL,NULL,'plant-ai-v3',163,DATE_SUB(NOW(3),INTERVAL 74 MINUTE))
-ON DUPLICATE KEY UPDATE `deviceId`=VALUES(`deviceId`),`capturedAt`=VALUES(`capturedAt`),`diseaseId`=VALUES(`diseaseId`),`confidence`=VALUES(`confidence`),`boundingBoxes`=VALUES(`boundingBoxes`),`imagePath`=VALUES(`imagePath`),`modelVersion`=VALUES(`modelVersion`),`inferenceMs`=VALUES(`inferenceMs`),`receivedAt`=VALUES(`receivedAt`);
+INSERT INTO `leafAnalyses` (`id`,`eventId`,`deviceId`,`capturedAt`,`diseaseId`,`confidence`,`boundingBoxes`,`aiResult`,`imagePath`,`imageUrl`,`cloudinaryPublicId`,`imageSha256`,`modelVersion`,`inferenceMs`,`receivedAt`) VALUES
+(1,'demo-ai-event-0001',8,DATE_SUB(NOW(3),INTERVAL 22 MINUTE),1,0.9300,JSON_ARRAY(JSON_OBJECT('x',0.22,'y',0.18,'width',0.47,'height',0.55)),NULL,NULL,NULL,NULL,NULL,'plant-ai-v3',241,DATE_SUB(NOW(3),INTERVAL 21 MINUTE)),
+(2,'demo-ai-event-0002',NULL,DATE_SUB(NOW(3),INTERVAL 48 MINUTE),2,0.8700,JSON_ARRAY(JSON_OBJECT('x',0.30,'y',0.24,'width',0.38,'height',0.41)),NULL,NULL,NULL,NULL,NULL,'plant-ai-v3',218,DATE_SUB(NOW(3),INTERVAL 47 MINUTE)),
+(3,'demo-ai-event-0003',NULL,DATE_SUB(NOW(3),INTERVAL 75 MINUTE),3,0.9850,NULL,NULL,NULL,NULL,NULL,'plant-ai-v3',163,DATE_SUB(NOW(3),INTERVAL 74 MINUTE))
+ON DUPLICATE KEY UPDATE `deviceId`=VALUES(`deviceId`),`capturedAt`=VALUES(`capturedAt`),`diseaseId`=VALUES(`diseaseId`),`confidence`=VALUES(`confidence`),`boundingBoxes`=VALUES(`boundingBoxes`),`aiResult`=VALUES(`aiResult`),`imagePath`=VALUES(`imagePath`),`imageUrl`=VALUES(`imageUrl`),`cloudinaryPublicId`=VALUES(`cloudinaryPublicId`),`imageSha256`=VALUES(`imageSha256`),`modelVersion`=VALUES(`modelVersion`),`inferenceMs`=VALUES(`inferenceMs`),`receivedAt`=VALUES(`receivedAt`);
 
 INSERT INTO `alerts` (`id`,`type`,`severity`,`status`,`title`,`message`,`deviceId`,`analysisId`,`createdAt`,`acknowledgedBy`,`acknowledgedAt`,`resolvedBy`,`resolvedAt`,`resolutionNote`) VALUES
 (1,'disease','CRITICAL','NEW','Phát hiện bệnh mốc sương','Bệnh: Bệnh mốc sương (độ tin cậy 93%)',NULL,1,DATE_SUB(NOW(3),INTERVAL 20 MINUTE),NULL,NULL,NULL,NULL,NULL),
 (2,'sensor_threshold','WARNING','NEW','Độ ẩm đất đang thấp','Độ ẩm đất 34% — thấp hơn ngưỡng cài đặt 40%.',1,NULL,DATE_SUB(NOW(3),INTERVAL 8 MINUTE),NULL,NULL,NULL,NULL,NULL),
-(3,'offline','WARNING','ACKNOWLEDGED','Node khu B mất kết nối','NODE-02 chưa gửi heartbeat trong thời gian quy định.',7,NULL,DATE_SUB(NOW(3),INTERVAL 2 HOUR),2,DATE_SUB(NOW(3),INTERVAL 90 MINUTE),NULL,NULL,NULL),
+(3,'offline','WARNING','ACKNOWLEDGED','Node khu B mất kết nối','NODE-002 chưa gửi heartbeat trong thời gian quy định.',7,NULL,DATE_SUB(NOW(3),INTERVAL 2 HOUR),2,DATE_SUB(NOW(3),INTERVAL 90 MINUTE),NULL,NULL,NULL),
 (4,'fault','CRITICAL','NEW','Bơm B1 báo lỗi','Thiết bị đang ở vòng đời FAULT, cần kiểm tra trước khi vận hành.',3,NULL,DATE_SUB(NOW(3),INTERVAL 18 MINUTE),NULL,NULL,NULL,NULL,NULL),
 (5,'disease','WARNING','NEW','Phát hiện bệnh đốm vòng','Bệnh: Bệnh đốm vòng (độ tin cậy 87%)',NULL,2,DATE_SUB(NOW(3),INTERVAL 46 MINUTE),NULL,NULL,NULL,NULL,NULL),
 (6,'system','INFO','RESOLVED','Kiểm tra hệ thống hoàn tất','Sự kiện minh họa đã xử lý.',1,NULL,DATE_SUB(NOW(3),INTERVAL 1 DAY),1,DATE_SUB(NOW(3),INTERVAL 1 DAY),1,DATE_SUB(NOW(3),INTERVAL 23 HOUR),'Đã xác nhận dữ liệu demo.')
@@ -348,8 +395,8 @@ INSERT INTO `auditLogs` (`id`,`userId`,`action`,`entityType`,`entityId`,`detail`
 (2,1,'user.create','user',2,JSON_OBJECT('username','operator1','role','operator','source','demo'),1,DATE_SUB(NOW(3),INTERVAL 3 DAY)),
 (3,2,'device.command','device',1,JSON_OBJECT('command','turnOn','source','demo'),1,DATE_SUB(NOW(3),INTERVAL 16 MINUTE)),
 (4,1,'device.config_update','device',1,JSON_OBJECT('configVersion',3,'source','demo'),1,DATE_SUB(NOW(3),INTERVAL 1 HOUR)),
-(5,NULL,'analysis.mqtt_received','leafAnalysis',1,JSON_OBJECT('eventId','demo-ai-event-0001','imageSaved',TRUE,'source','demo'),1,DATE_SUB(NOW(3),INTERVAL 21 MINUTE)),
-(6,NULL,'node.offline','node',2,JSON_OBJECT('nodeCode','NODE-02','source','demo'),1,DATE_SUB(NOW(3),INTERVAL 2 HOUR)),
+(5,NULL,'analysis.camera_received','leafAnalysis',1,JSON_OBJECT('eventId','demo-ai-event-0001','imageSaved',TRUE,'source','demo'),1,DATE_SUB(NOW(3),INTERVAL 21 MINUTE)),
+(6,NULL,'node.offline','node',2,JSON_OBJECT('nodeCode','NODE-002','source','demo'),1,DATE_SUB(NOW(3),INTERVAL 2 HOUR)),
 (7,2,'authz.denied','device',3,JSON_OBJECT('reason','demo denied request'),0,DATE_SUB(NOW(3),INTERVAL 90 MINUTE))
 ON DUPLICATE KEY UPDATE `userId`=VALUES(`userId`),`action`=VALUES(`action`),`entityType`=VALUES(`entityType`),`entityId`=VALUES(`entityId`),`detail`=VALUES(`detail`),`success`=VALUES(`success`),`createdAt`=VALUES(`createdAt`);
 
@@ -361,6 +408,8 @@ UNION ALL SELECT 'sensorReadings', COUNT(*) FROM `sensorReadings`
 UNION ALL SELECT 'diseases', COUNT(*) FROM `diseases`
 UNION ALL SELECT 'treatments', COUNT(*) FROM `treatments`
 UNION ALL SELECT 'leafAnalyses', COUNT(*) FROM `leafAnalyses`
+UNION ALL SELECT 'cameraTokens', COUNT(*) FROM `cameraTokens`
+UNION ALL SELECT 'camera_media', COUNT(*) FROM `camera_media`
 UNION ALL SELECT 'alerts', COUNT(*) FROM `alerts`
 UNION ALL SELECT 'deviceCommands', COUNT(*) FROM `deviceCommands`
 UNION ALL SELECT 'auditLogs', COUNT(*) FROM `auditLogs`;

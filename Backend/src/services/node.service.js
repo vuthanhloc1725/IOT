@@ -105,7 +105,8 @@ exports.retryPendingConfigurations = async ({ force = false } = {}) => {
 async function onBackOnline(node) {
     const devices = await Device.findAll({ where: { nodeId: node.id } });
     for (const device of devices) {
-        socket.emitDevice(device.id, 'device:update', { ...device.toJSON(), isOnline: true });
+        // Device connectivity follows its parent Node; lifecycle is deliberately unchanged.
+        socket.emitDevice(device.id, 'device:update', { ...device.toJSON(), isOnline: device.lifecycle !== 'DECOMMISSIONED' });
         const openAlerts = await Alert.findAll({
             where: { deviceId: device.id, type: 'offline', status: { [Op.ne]: 'RESOLVED' } },
         });
@@ -147,27 +148,31 @@ exports.markAlive = async (node, { firmwareVersion, bootCount, uptimeMs } = {}) 
 };
 
 exports.markOffline = async (node, reason = 'timeout') => {
-    if (!node.isOnline) return;
-    node.isOnline = false;
-    await node.save();
-    await audit.log(null, { action: 'node.offline', entityType: 'node', entityId: node.id, success: true, detail: { nodeCode: node.nodeCode, reason } });
-    const devices = await Device.findAll({ where: { nodeId: node.id, lifecycle: 'ACTIVE' } });
+    const wasOnline = Boolean(node.isOnline);
+    if (wasOnline) {
+        node.isOnline = false;
+        await node.save();
+        await audit.log(null, { action: 'node.offline', entityType: 'node', entityId: node.id, success: true, detail: { nodeCode: node.nodeCode, reason } });
+    }
+    // Notify every child Device, not only ACTIVE ones. This changes connection status,
+    // not lifecycle; never claim a physical actuator is OFF merely because MQTT is lost.
+    const devices = await Device.findAll({ where: { nodeId: node.id } });
     for (const device of devices) {
-        socket.emitDevice(device.id, 'device:update', { ...device.toJSON(), isOnline: false });
+        socket.emitDevice(device.id, 'device:update', { ...device.toJSON(), isOnline: false, nodeOfflineReason: reason });
+        if (device.lifecycle === 'DECOMMISSIONED') continue;
         const existing = await Alert.findOne({
             where: { deviceId: device.id, type: 'offline', status: { [Op.ne]: 'RESOLVED' } },
         });
         if (!existing) {
             await alertService.create({
-                type: 'offline',
-                severity: 'WARNING',
+                type: 'offline', severity: 'WARNING',
                 title: `Thiết bị ${device.name} mất kết nối`,
                 message: `Node ${node.nodeCode} không còn gửi heartbeat (${reason}).`,
                 deviceId: device.id,
             });
         }
     }
-    socket.emitAdmin('node:status', { nodeId: node.id, isOnline: false });
+    socket.emitAdmin('node:status', { nodeId: node.id, isOnline: false, reason });
 };
 
 exports.sweep = async () => {

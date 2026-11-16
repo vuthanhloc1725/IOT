@@ -1,5 +1,5 @@
 {
-  "camera_id": "PHONE-CAM-01",
+  "camera_id": "CAM-001",
   "heartbeat_interval_seconds": 30,
   "upload": {
     "url": "https://api.example.org/api/camera/media",

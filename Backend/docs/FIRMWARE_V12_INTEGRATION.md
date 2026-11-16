@@ -4,7 +4,7 @@ Phạm vi hiện tại: chỉ tích hợp Node Telemetry; chưa cấu hình Node
 
 ## Định danh
 
-- `nodeCode` do Backend cấp khi tạo Node. Nhập đúng giá trị này vào trường `Device ID` của captive portal ESP32. Topic ID phải khớp chính xác `nodeCode`; nếu firmware nhập một ID khác, Backend sẽ không tìm thấy Node.
+- `nodeCode` mới do Backend cấp theo ID tự tăng (`NODE-001`, `NODE-002`, ...). Với luồng có MAC, trạm nạp USB nhận `nodeCode` trong response của `POST /api/provisioning/claim` và ghi vào `device_config.h`; không yêu cầu người dùng nhập thủ công. Topic ID phải khớp chính xác `nodeCode`, nếu khác Backend sẽ không tìm thấy Node.
 - `deviceCode` là mã bản ghi thiết bị con do Backend sinh. Payload telemetry firmware v1.2 có thể gửi các trường phẳng nên Backend ánh xạ các metric vào SENSOR có `config.metrics`; `deviceCode` không phải MQTT topic ID của ESP32.
 - GPIO theo báo cáo: cảm biến đất GPIO34; DHT11 GPIO4; relay bơm GPIO26; relay quạt GPIO27. Không đăng ký còi/LED.
 
@@ -86,7 +86,7 @@ Backend gửi `action: "config"` trên topic `/cmd`. Các tên trường chuẩn
 ## Tài khoản MQTT và thu hồi Node
 
 - Mỗi Node có một MQTT username/password riêng và một ACL role giới hạn vào `sf/{nodeCode}/...`. Tài khoản của các Device con không tách riêng vì chúng dùng chung kết nối vật lý MQTT của Node.
-- Khi tạo Node, Backend trả credential một lần qua Web Admin. Lưu username/password vào captive portal ESP32; password không được lưu dạng rõ trong MySQL. Chức năng Cấp lại mật khẩu sẽ vô hiệu password cũ và yêu cầu cập nhật lại ESP32.
+- Với luồng claim (Node có MAC), MQTT account chỉ được tạo khi trạm nạp gọi `POST /api/provisioning/claim` thành công và credential được trả một lần trong response đó. Node tạo không có MAC (tương thích cũ) nhận credential một lần qua Web Admin. Password không được lưu dạng rõ trong MySQL; Cấp lại mật khẩu sẽ vô hiệu password cũ và yêu cầu cập nhật lại firmware.
 - Khi thu hồi Device, không thu hồi MQTT account của Node. Backend chỉ chặn dữ liệu/lệnh của Device đã decommission để các Device con khác tiếp tục chạy.
 - Khi thu hồi toàn bộ Node, Backend gọi Dynamic Security `disableClient`, khiến Broker ngắt phiên hiện tại và từ chối kết nối mới. Khôi phục Node gọi `enableClient`; heartbeat mới xác nhận online.
 - Cần bật Mosquitto Dynamic Security plugin và cấu hình tài khoản MQTT riêng của Backend. Hướng dẫn ở `Backend/docs/mosquitto-acl.example`.

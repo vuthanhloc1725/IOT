@@ -5,7 +5,6 @@ const app = require('./app');
 const socketService = require('./src/services/socket.service');
 const mqttClient = require('./src/services/mqtt.client');
 const ingest = require('./src/services/ingest.service');
-const analysisService = require('./src/services/analysis.service');
 const nodeService = require('./src/services/node.service');
 
 async function syncDatabase() {
@@ -36,7 +35,6 @@ async function main() {
     });
     socketService.init(server);          // Socket.IO dùng chung cổng với Express
     mqttClient.start(async (nodeCode, kind, payload) => {
-        if (kind === 'ai/result') return analysisService.handleMqttResult(payload);
         return ingest.handle(nodeCode, kind, payload);
     }, async () => nodeService.retryPendingConfigurations({ force: true })); // retry cấu hình chưa ACK sau connect/reconnect
 
@@ -54,7 +52,7 @@ async function main() {
         }
     }, env.heartbeatSweepSec * 1000);
 
-    server.listen(env.port, () => console.log(`[http] http://localhost:${env.port}  (${env.nodeEnv})`));
+    server.listen(env.port, '0.0.0.0', () => console.log(`[http] listening on 0.0.0.0:${env.port} (${env.nodeEnv})`));
 
     // Tắt êm: ngừng nhận request, đóng MQTT và DB
     let closing = false;

@@ -9,7 +9,8 @@
     "mqtt:setup": "node scripts/setup-local-mqtt.js",
     "mqtt:start": "mosquitto -c .mqtt/mosquitto.conf -d",
     "test:security": "node --test tests/mqtt-tls.test.js tests/command-ack-security.test.js tests/external-analysis-result.test.js tests/analysis-image-storage.test.js tests/device-probe-validation.test.js tests/threshold-lifecycle-session.test.js tests/mqtt-acl-consistency.test.js tests/code-generator.test.js tests/node-claim.test.js tests/mqtt-dynsec.test.js tests/camera-upload.test.js",
-    "seed:admin": "node scripts/seed-admin.js"
+    "seed:admin": "node scripts/seed-admin.js",
+    "seed": "node scripts/seed.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -23,7 +24,9 @@
     "mqtt": "^5.16.0",
     "mysql2": "^3.24.5",
     "sequelize": "^6.37.8",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "cloudinary": "^2.7.0",
+    "multer": "^2.0.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.9"

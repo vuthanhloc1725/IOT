@@ -1,7 +1,6 @@
 const env = require('./env');
 
 const PREFIX = env.mqtt.firmwarePrefix; // firmware mặc định "sf"
-const AI_RESULT_TOPIC = `${env.mqtt.prefix}/ai/result`; // giữ nguyên prefix AI hiện hữu
 
 // ---- Tùy chọn kết nối tới broker (truyền vào mqtt.connect) ----
 const connectOptions = {
@@ -22,7 +21,6 @@ const connectOptions = {
 };
 
 // ---- Topic quy ước ----
-// AI bên ngoài → server : {prefix}/ai/result (JSON + ảnh Base64)
 // Firmware Telemetry v1.2: sf/<nodeCode>/telemetry, telemetry/backfill, heartbeat, status, config, cmd/ack
 // Server → firmware: sf/<nodeCode>/cmd (action pump/fan/config/lifecycle/...)
 const subscribeTopics = [
@@ -35,7 +33,6 @@ const subscribeTopics = [
     `${PREFIX}/+/command/ack`,
     `${PREFIX}/+/config/ack`,
     `${PREFIX}/+/device/probe/ack`,
-    AI_RESULT_TOPIC,
 ];
 
 const topics = {
@@ -43,12 +40,10 @@ const topics = {
     config: (nodeCode) => `${PREFIX}/${nodeCode}/config`,
     deviceProbe: (nodeCode) => `${PREFIX}/${nodeCode}/device/probe`,
     backendStatus: `${PREFIX}/_backend/status`,
-    aiResult: AI_RESULT_TOPIC,
 };
 
-// "sf/NODE-01/cmd/ack" → { nodeCode: "NODE-01", kind: "cmd/ack" }
+// "sf/NODE-001/cmd/ack" → { nodeCode: "NODE-001", kind: "cmd/ack" }
 const parseTopic = (topic) => {
-    if (topic === AI_RESULT_TOPIC) return { nodeCode: null, kind: 'ai/result' };
     const [, nodeCode, ...rest] = topic.split('/');
     return { nodeCode, kind: rest.join('/') };
 };

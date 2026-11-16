@@ -26,7 +26,7 @@ X-Camera-Id: {cameraId}
 X-Content-SHA256: {sha256 hex}
 Content-Type: multipart/form-data
   part "metadata" (application/json):
-    {"schemaVersion":2,"cameraId":"PHONE-CAM-01","eventId":"PHONE-CAM-01-1794640413-41e355003cc2",
+    {"schemaVersion":2,"cameraId":"CAM-001","eventId":"CAM-001-1794640413-41e355003cc2",
      "requestId":null,"mediaType":"image","mimeType":"image/jpeg",
      "capturedAt":"2026-11-14T07:13:33.120Z","sizeBytes":812345,"sha256":"…","agentVersion":"0.2.0"}
   part "file" (image/jpeg | video/mp4): nội dung ảnh/video
@@ -88,9 +88,9 @@ nano config.json
 
 Các trường cần sửa:
 
-- `camera_id`: duy nhất cho mỗi điện thoại.
+- `camera_id`: mã Camera do backend sinh khi Admin đăng ký `POST /api/camera` (dạng `CAM-001`).
 - `upload.url`: URL HTTPS đầy đủ của endpoint upload.
-- `upload.token`: token riêng của điện thoại (không dùng chung).
+- `upload.token`: token riêng của điện thoại, lấy bằng `POST /api/camera/tokens/CAM-001` (JWT Admin, chỉ hiện 1 lần; gọi lại để cấp mới, `DELETE` cùng URL để thu hồi).
 - `upload.ca_file`: để `""` nếu server dùng chứng chỉ công khai (Let's Encrypt…);
   nếu dùng chứng chỉ tự ký thì chép CA vào `~/phone-camera/server-ca.pem` và điền
   đường dẫn `/data/data/com.termux/files/home/phone-camera/server-ca.pem`.

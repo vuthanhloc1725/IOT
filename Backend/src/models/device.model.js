@@ -5,7 +5,7 @@ module.exports = (sequelize, DataTypes) =>
             id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
             deviceCode: { type: DataTypes.STRING(50), allowNull: false, unique: true },
             name: { type: DataTypes.STRING(100), allowNull: false },
-            // CAMERA được giữ trong ENUM để đọc dữ liệu cũ; API không cho tạo camera mới.
+            // CAMERA dùng cho Camera/Agent gửi ảnh trực tiếp qua HTTP, quản lý token riêng.
             type: { type: DataTypes.ENUM('PUMP', 'FAN', 'SENSOR', 'CAMERA'), allowNull: false },
             location: { type: DataTypes.STRING(150), allowNull: true },
             nodeId: { type: DataTypes.INTEGER, allowNull: true },

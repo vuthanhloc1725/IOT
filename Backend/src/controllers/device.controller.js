@@ -14,7 +14,7 @@ const alertService = require('../services/alert.service');
 const { accessibleDeviceIds, scopeWhere, getDeviceForUser } = require('../services/access.service');
 const { recoveryBlockReason } = require('../services/device-lifecycle.policy');
 const { DEFAULT_SENSOR_THRESHOLD_RULES, normalizeRule: normalizeThresholdRule } = require('../services/sensor-threshold.policy');
-const { createWithGeneratedCode } = require('../services/code-generator');
+const { createWithSequentialCode } = require('../services/code-generator');
 
 const nodeInclude = { model: Node, as: 'node', attributes: ['id', 'name', 'isOnline', 'lastHeartbeatAt', 'isRevoked'] };
 const OPS = ['lt', 'lte', 'gt', 'gte'];
@@ -234,7 +234,7 @@ exports.probeAndRegister = async (req, res) => {
     const registeredAt = new Date();
     let created;
     try {
-        created = await createWithGeneratedCode({
+        created = await createWithSequentialCode({
             prefix: 'DEV', Model: Device, field: 'deviceCode',
             values: {
                 name: String(name).trim(),
@@ -251,7 +251,7 @@ exports.probeAndRegister = async (req, res) => {
             },
         });
     } catch (error) {
-        if (error.code === 'CODE_GENERATION_EXHAUSTED') throw ApiError.conflict('Không thể sinh mã thiết bị duy nhất; vui lòng thử lại.');
+        if (error.name === 'SequelizeUniqueConstraintError') throw ApiError.conflict('Mã thiết bị tuần tự đã tồn tại. Hãy kiểm tra dữ liệu thiết bị cũ trước khi tạo tiếp.');
         throw error;
     }
     const device = created.record;
@@ -294,7 +294,7 @@ exports.create = async (req, res) => {
     if (pinOwner) throw ApiError.conflict(`GPIO ${pin} đã được gán cho ${pinOwner.deviceCode}; một thiết bị vật lý chỉ nên đăng ký một lần.`);
     let created;
     try {
-        created = await createWithGeneratedCode({
+        created = await createWithSequentialCode({
             prefix: 'DEV', Model: Device, field: 'deviceCode',
             values: {
                 name: name.trim(), type, location: location ?? null,
@@ -305,7 +305,7 @@ exports.create = async (req, res) => {
             },
         });
     } catch (error) {
-        if (error.code === 'CODE_GENERATION_EXHAUSTED') throw ApiError.conflict('Không thể sinh mã thiết bị duy nhất; vui lòng thử lại.');
+        if (error.name === 'SequelizeUniqueConstraintError') throw ApiError.conflict('Mã thiết bị tuần tự đã tồn tại. Hãy kiểm tra dữ liệu thiết bị cũ trước khi tạo tiếp.');
         throw error;
     }
     const device = created.record;

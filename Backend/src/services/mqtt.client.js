@@ -3,21 +3,14 @@ const env = require('../config/env');
 const mqttTlsOptions = require('../config/mqtt-tls');
 
 const P = env.mqtt.firmwarePrefix;
-const AI_RESULT_TOPIC = `${env.mqtt.prefix}/ai/result`;
 let client = null;
-// 5 MiB ảnh Base64 chiếm khoảng 6.7 MiB; chừa thêm dung lượng cho metadata JSON.
-const MAX_MQTT_PAYLOAD_BYTES = Math.max(
-    8 * 1024 * 1024,
-    Math.ceil(env.ai.imageMaxBytes * 4 / 3) + 256 * 1024
-);
+const MAX_MQTT_PAYLOAD_BYTES = 256 * 1024;
 const ALLOWED_KINDS = new Set(['telemetry', 'telemetry/backfill', 'heartbeat', 'status', 'config', 'cmd/ack', 'command/ack', 'config/ack', 'device/probe/ack']);
 
 // Topic quy ước:
-// Dịch vụ AI bên thứ ba → backend: {P}/ai/result (JSON + ảnh Base64)
 // Firmware v1.2: Node → server {P}/{nodeCode}/telemetry, telemetry/backfill, heartbeat, status, config, cmd/ack
 // Server → Node {P}/{nodeCode}/cmd
 exports.topics = {
-    aiResult: AI_RESULT_TOPIC,
     command: (nodeCode) => `${P}/${nodeCode}/cmd`,
     config: (nodeCode) => `${P}/${nodeCode}/config`,
     deviceProbe: (nodeCode) => `${P}/${nodeCode}/device/probe`,
@@ -56,13 +49,12 @@ exports.start = (onMessage, onConnected = null) => {
                 `${P}/+/command/ack`,
                 `${P}/+/config/ack`,
                 `${P}/+/device/probe/ack`,
-                AI_RESULT_TOPIC,
             ],
             { qos: 1 },
             (err) => {
                 if (err) console.error('[mqtt] subscribe lỗi:', err.message);
                 else {
-                    console.log(`[mqtt] đã subscribe telemetry/heartbeat/status/config/ACK và kết quả AI: ${AI_RESULT_TOPIC}`);
+                    console.log('[mqtt] đã subscribe telemetry/heartbeat/status/config/ACK');
                     if (typeof onConnected === 'function') {
                         Promise.resolve(onConnected()).catch((e) => console.error('[mqtt] lỗi đồng bộ config đang chờ:', e.message || e));
                     }
@@ -75,23 +67,17 @@ exports.start = (onMessage, onConnected = null) => {
     client.on('offline', () => console.warn('[mqtt] mất kết nối broker, đang thử lại...'));
 
     client.on('message', (topic, buf) => {
-        const isAiResult = topic === AI_RESULT_TOPIC;
-        let nodeCode = null;
-        let kind = 'ai/result';
-
-        if (!isAiResult) {
-            const prefix = `${P}/`;
-            if (typeof topic !== 'string' || !topic.startsWith(prefix)) return;
-            const rest = topic.slice(prefix.length);
-            const slash = rest.indexOf('/');
-            if (slash <= 0) return;
-            nodeCode = rest.slice(0, slash);
-            kind = rest.slice(slash + 1);
-            if (!/^[A-Za-z0-9._-]{1,50}$/.test(nodeCode) || !ALLOWED_KINDS.has(kind)) return;
-        }
+        const prefix = `${P}/`;
+        if (typeof topic !== 'string' || !topic.startsWith(prefix)) return;
+        const rest = topic.slice(prefix.length);
+        const slash = rest.indexOf('/');
+        if (slash <= 0) return;
+        const nodeCode = rest.slice(0, slash);
+        const kind = rest.slice(slash + 1);
+        if (!/^[A-Za-z0-9._-]{1,50}$/.test(nodeCode) || !ALLOWED_KINDS.has(kind)) return;
 
         if (!Buffer.isBuffer(buf) || buf.length > MAX_MQTT_PAYLOAD_BYTES) {
-            console.warn(`[mqtt] từ chối payload quá lớn/không hợp lệ trên ${isAiResult ? 'ai/result' : `${nodeCode}/${kind}`} (${Buffer.isBuffer(buf) ? buf.length : 'non-buffer'} bytes)`);
+            console.warn(`[mqtt] từ chối payload quá lớn/không hợp lệ trên ${nodeCode}/${kind}`);
             return;
         }
 
@@ -100,26 +86,25 @@ exports.start = (onMessage, onConnected = null) => {
         try {
             payload = JSON.parse(text);
         } catch {
-            // Retained/LWT online/offline cho topic status của Node.
             const rawStatus = text.trim().toLowerCase();
-            if (!isAiResult && kind === 'status' && ['online', 'offline'].includes(rawStatus)) {
+            if (kind === 'status' && ['online', 'offline'].includes(rawStatus)) {
                 payload = { raw: rawStatus };
             } else {
-                console.warn(`[mqtt] từ chối JSON không hợp lệ trên ${isAiResult ? 'ai/result' : `${nodeCode}/${kind}`}`);
+                console.warn(`[mqtt] từ chối JSON không hợp lệ trên ${nodeCode}/${kind}`);
                 return;
             }
         }
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-            if (!isAiResult && kind === 'status' && typeof payload === 'string' && ['online', 'offline'].includes(payload.toLowerCase())) {
+            if (kind === 'status' && typeof payload === 'string' && ['online', 'offline'].includes(payload.toLowerCase())) {
                 payload = { raw: payload.toLowerCase() };
             } else {
-                console.warn(`[mqtt] từ chối payload không phải object trên ${isAiResult ? 'ai/result' : `${nodeCode}/${kind}`}`);
+                console.warn(`[mqtt] từ chối payload không phải object trên ${nodeCode}/${kind}`);
                 return;
             }
         }
 
         Promise.resolve(onMessage(nodeCode, kind, payload)).catch((e) => {
-            console.error(`[mqtt] lỗi xử lý ${isAiResult ? 'ai/result' : `${nodeCode}/${kind}`}:`, e.message || e);
+            console.error(`[mqtt] lỗi xử lý ${nodeCode}/${kind}:`, e.message || e);
         });
     });
 };

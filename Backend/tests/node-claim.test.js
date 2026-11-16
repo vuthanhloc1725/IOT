@@ -119,7 +119,15 @@ function claimHarness({
             '../models': { Node, Device: { findAll: async () => devices }, sequelize },
             '../services/audit.service': { log: async () => {} },
             '../services/node.service': { markOffline: async () => {} },
+            '../services/command.service': { issue: async () => { throw new Error('safe-stop không được gọi khi không có PUMP/FAN đang bật'); } },
             '../services/mqtt-dynsec.service': dynsec,
+            // Mã tuần tự thật cần Model.sequelize + transaction; test chỉ cần mã cố định NODE-123.
+            '../services/code-generator': {
+                createWithSequentialCode: async ({ Model, field, values }) => {
+                    const record = await Model.create({ ...values, [field]: 'NODE-123' });
+                    return { record, code: 'NODE-123' };
+                },
+            },
             '../config/env': env,
         },
         [provisioningPath]: { './mqtt-dynsec.service': dynsec, '../config/env': env },

@@ -1,11 +1,12 @@
-# Khởi tạo MySQL và dữ liệu demo
+# MySQL schema + demo data
 
-## Cách chạy nhanh
+## Database mới
 
-1. Mở MySQL Workbench, chọn tab SQL hoặc dùng terminal.
-2. Chạy toàn bộ file `database/smart_agri_mysql_demo.sql`.
-3. File tạo database `iot`, schema theo các Sequelize model hiện tại, rồi chèn dữ liệu demo cho các màn hình.
-4. Tạo `Backend/.env` từ `.env.example`, bảo đảm các biến MySQL đúng với database vừa tạo:
+1. Tạo database MySQL `iot`.
+2. Chạy `smart_agri_mysql_demo.sql` bằng MySQL 8.0+.
+3. Tạo file `Backend/.env` từ `.env.example`, cấu hình DB/JWT/AI/Cloudinary.
+4. Chạy `npm run seed` trong Backend để bảo đảm có Admin, danh mục bệnh và Camera mẫu `CAM-001`.
+5. Admin đăng nhập rồi cấp Camera token qua `POST /api/camera/tokens/CAM-001`.
 
 ```env
 DB_HOST=localhost
@@ -19,17 +20,41 @@ MQTT_TOPIC_PREFIX=iot
 MQTT_FIRMWARE_TOPIC_PREFIX=sf
 ```
 
-Để kiểm tra giao diện chỉ bằng dữ liệu demo, có thể tạm đặt `MQTT_ENABLED=false`; khi muốn chạy ESP32/AI thực tế thì cấu hình lại broker và bật MQTT.
+Tài khoản demo trong SQL: `admin / Demo@12345678`. Đổi/xóa tài khoản demo trước khi dùng môi trường thật. Script `seed.js` tạo Admin theo `BOOTSTRAP_ADMIN_*`; password cần ít nhất 12 ký tự.
 
-Terminal tại thư mục `Backend`:
+## Database đã tồn tại
+
+Backup trước, rồi chạy migration camera theo đúng thứ tự (mỗi file một lần):
 
 ```bash
-npm install
-npm run test:security
-npm run dev
+mysql -u root -p iot < database/migrations/20261115_leaf_analysis_predictions.sql
+mysql -u root -p iot < database/migrations/20261115_camera_http_cloudinary.sql
+mysql -u root -p iot < database/migrations/20261115_camera_media.sql
 ```
 
-Terminal thứ hai tại thư mục `Frontend`:
+Các migration này thêm:
+- `cameraTokens`: hash token Camera (theo `deviceId`), hạn dùng, trạng thái thu hồi và lần sử dụng gần nhất.
+- `leafAnalyses.predictions` / `aiResult`: kết quả AI.
+- `leafAnalyses.imageUrl`, `cloudinaryPublicId`: secure URL và định danh asset Cloudinary.
+- `leafAnalyses.imageSha256`: checksum ảnh nhận được.
+- `camera_media`: kho fallback lưu ảnh/video trên đĩa khi chưa cấu hình AI + Cloudinary.
+
+Sau đó chạy `npm run seed`.
+
+## Hai chế độ lưu ảnh Camera
+
+- Đủ `AI_API_URL`, `AI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` → ảnh đi AI `/predict` → Cloudinary → `leafAnalyses`.
+- Thiếu bất kỳ biến nào → ảnh/video lưu đĩa (`CAMERA_IMAGE_STORAGE_DIR`) + bảng `camera_media`, xem qua `GET /api/camera/media`.
+
+## Lưu ý bảo mật
+
+
+- Không seed sẵn Camera token; Admin phải cấp token riêng.
+- Token thô chỉ trả về một lần, DB chỉ lưu SHA-256 hash.
+- Không commit `.env`, `CLOUDINARY_API_SECRET`, `AI_API_KEY` hoặc token Camera.
+- Ảnh mới được upload Cloudinary; database lưu URL, public ID, SHA-256 và kết quả AI.
+
+## Chạy Frontend
 
 ```bash
 npm install

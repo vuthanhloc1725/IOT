@@ -1,15 +1,20 @@
 # Tự động sinh `nodeCode` và `deviceCode`
 
-## Nguyên tắc
+## 1. Mã định danh tuần tự
 
-- Backend là nơi duy nhất sinh `nodeCode` và `deviceCode`.
-- Mã có dạng `NODE-<16 ký tự hex>` và `DEV-<16 ký tự hex>`, tạo từ `crypto.randomBytes(8)`.
-- Mã được kiểm tra chưa tồn tại trước khi ghi. Nếu va chạm unique do hai yêu cầu đồng thời, backend thử sinh lại; unique index MySQL vẫn là hàng rào cuối cùng.
-- Mã định danh không phải MQTT credential. Mosquitto username/password hoặc chứng thư phải được cấp riêng.
+Backend là nơi duy nhất sinh mã định danh. Mã lấy từ `AUTO_INCREMENT id` của bản ghi, không dùng `COUNT(*) + 1`:
 
-## Tạo Node
+- Node: `NODE-001`, `NODE-002`, `NODE-010`, ...
+- Device: `DEV-001`, `DEV-002`, `DEV-010`, ...
+- Tối thiểu 3 chữ số; từ ID 1000 trở đi giữ nguyên đủ chữ số, ví dụ `NODE-1000`.
+- Không tái sử dụng số khi xóa bản ghi vì ID AUTO_INCREMENT không được tính lại.
+- Các mã cũ trong database đang sử dụng được giữ nguyên để không phá MQTT topic, ACL và cấu hình Firmware hiện có. Database demo mới sử dụng định dạng tuần tự ngay từ đầu.
 
-Request `POST /api/nodes` không cần `nodeCode`:
+Việc tạo bản ghi tạm và cập nhật mã cuối cùng diễn ra trong cùng transaction. Unique index trên `nodeCode`/`deviceCode` vẫn là hàng rào cuối cùng.
+
+## 2. Tạo Node
+
+`POST /api/nodes` (Admin) không cần gửi `nodeCode`:
 
 ```json
 {
@@ -20,10 +25,9 @@ Request `POST /api/nodes` không cần `nodeCode`:
 }
 ```
 
-Response gồm `data.nodeCode`, ví dụ `NODE-5C23A91F0D7B4E12`, và `meta.nodeCodeGenerated: true`.
-Admin bàn giao mã này cho thành viên firmware để cấu hình đúng MQTT topic; cập nhật ACL Mosquitto theo mã đã cấp trước khi Node kết nối. Việc tạo row không tự tạo MQTT credential hoặc chứng minh Node đã online.
+Response gồm `data.nodeCode`, ví dụ `NODE-001`, và `meta.nodeCodeGenerated: true`. Nếu request có `macAddress`, Backend trả thêm claim token dùng một lần (chưa tạo MQTT account); MQTT account chỉ được tạo khi claim thành công tại trạm nạp. Nếu không có MAC (tương thích cũ), Backend tạo MQTT account ngay và trả password một lần. Chi tiết: `DEVICE_CLAIM_LIFECYCLE.md`.
 
-## Probe và tạo thiết bị
+## 3. Probe và tạo thiết bị
 
 Request `POST /api/devices/probe` không cần `deviceCode`:
 
@@ -71,11 +75,11 @@ Backend kiểm tra request ID, đúng Node, type/GPIO và self-test hợp lệ. 
 
 Khi Admin cấp phát (`REGISTERED → PROVISIONED`), config MQTT sẽ mang `deviceCode` do Backend vừa sinh. Firmware lưu mapping mã đó với endpoint/GPIO. Config ACK, telemetry và readiness từ thời điểm này sử dụng `deviceCode` đã được cấp.
 
-## Hướng dẫn bàn giao firmware/broker
+## 4. Hướng dẫn bàn giao firmware/broker
 
 1. Tạo Node trong giao diện Admin.
-2. Sao chép `nodeCode` do Backend trả về vào cấu hình firmware.
-3. Tạo/cấp credential riêng trên Mosquitto; thay placeholder `NODE-01` trong ACL mẫu bằng `nodeCode` thật, không lấy mã làm mật khẩu.
+2. Với Node có MAC: trạm nạp USB gọi `POST /api/provisioning/claim` bằng claim token, nhận `nodeCode` + MQTT credential và ghi vào `device_config.h` (xem `DEVICE_CLAIM_LIFECYCLE.md`). Node không có MAC: sao chép `nodeCode` do Backend trả về vào cấu hình firmware.
+3. Tạo/cấp credential riêng trên Mosquitto; thay placeholder trong ACL mẫu bằng `nodeCode` thật, không lấy mã làm mật khẩu.
 4. Kết nối Node và chờ heartbeat để Backend đánh dấu online.
 5. Tạo thiết bị bằng tên, type, Node và GPIO. Firmware xử lý probe không cần `deviceCode`.
 6. Sau probe thành công, lấy `deviceCode` trả về trong API hoặc xem trên giao diện; firmware sẽ nhận mã này ở payload config sau khi Admin bấm cấp phát.

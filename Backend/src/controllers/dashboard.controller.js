@@ -36,7 +36,7 @@ exports.summary = async (req, res) => {
         openAlertsBySeverity: alertsBySeverity.map((r) => ({ severity: r.severity, count: Number(r.count) })),
         latestAnalyses: latestAnalyses.map((analysis) => {
             const item = analysis.toJSON();
-            return { ...item, imageUrl: item.imagePath ? `/api/analyses/${item.id}/image` : null };
+            return { ...item, imageUrl: item.imageUrl || (item.imagePath ? `/api/analyses/${item.id}/image` : null) };
         }),
     };
     if (req.user.role === 'admin') {

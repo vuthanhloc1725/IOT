@@ -75,6 +75,15 @@ const env = {
         minConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.5),
         imageMaxBytes: num(process.env.AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
         imageStorageDir: process.env.AI_IMAGE_STORAGE_DIR || 'storage/analysis-images',
+        apiUrl: process.env.AI_API_URL || '',
+        apiKey: process.env.AI_API_KEY || '',
+        requestTimeoutMs: num(process.env.AI_REQUEST_TIMEOUT_MS, 60000),
+    },
+    cloudinary: {
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+        apiKey: process.env.CLOUDINARY_API_KEY || '',
+        apiSecret: process.env.CLOUDINARY_API_SECRET || '',
+        folder: process.env.CLOUDINARY_FOLDER || 'smart-agri/camera-media',
     },
 };
 

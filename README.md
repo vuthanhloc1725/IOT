@@ -11,7 +11,7 @@ Nếu database mới/trống và bạn muốn nạp dữ liệu demo, chạy scr
 mysql -u root -p < Backend/database/smart_agri_mysql_demo.sql
 ```
 
-Script tạo database `iot`, tạo 11 bảng theo các model Sequelize và thêm tài khoản, Node/thiết bị, telemetry 24 giờ gần nhất, danh mục bệnh/phác đồ demo, lịch sử AI, cảnh báo, lệnh và audit log. Tài khoản mẫu dùng chung mật khẩu `Demo@12345678`: `admin`, `operator1`, `operator2`, `viewer1`, `viewer2`. Chỉ dùng local và đổi/xóa tài khoản demo trước khi deploy.
+Script tạo database `iot`, tạo 12 bảng theo các model Sequelize và thêm tài khoản, Node/thiết bị, telemetry 24 giờ gần nhất, danh mục bệnh/phác đồ demo, lịch sử AI, cảnh báo, lệnh và audit log. Tài khoản mẫu dùng chung mật khẩu `Demo@12345678`: `admin`, `operator1`, `operator2`, `viewer1`, `viewer2`. Chỉ dùng local và đổi/xóa tài khoản demo trước khi deploy.
 
 Gói demo kèm ảnh minh họa tại `Backend/storage/analysis-images/demo-late-blight.jpg`; hãy giữ file này để liên kết `imagePath` của bản ghi AI mẫu hoạt động. Trong `Backend/.env`, đặt `DB_NAME=iot`, đúng `DB_USER`/`DB_PASSWORD`; khi chỉ kiểm tra UI có thể tạm đặt `MQTT_ENABLED=false`. Dữ liệu/phác đồ là dữ liệu giả lập, không dùng làm khuyến cáo nông nghiệp thực tế.
 
@@ -62,8 +62,7 @@ Backend vẫn là nơi thực thi quyền truy cập; ẩn trang ở frontend ch
 ## 4. Dữ liệu còn cần cấu hình để chạy end-to-end
 
 - Bật Dynamic Security cho Mosquitto và tạo tài khoản riêng cho Backend theo `Backend/docs/mosquitto-acl.example`; sau đó tạo Node trong Web Admin. Backend sẽ tự sinh một credential và ACL role riêng cho từng Node. Lưu credential một lần hiển thị và nạp riêng cho ESP32 bằng `firmware/tools/provision.py` (firmware trong repo không dùng captive portal).
-- Cấp danh mục `Disease` và `Treatment` trước khi bên thứ ba gửi kết quả AI; backend phải map nhãn AI về bệnh trong danh mục.
-- Bên AI publish JSON kết quả có `eventId`, tên/nhãn bệnh, confidence, thời gian và `imageBase64` lên `{MQTT_TOPIC_PREFIX}/ai/result`.
+- Cấp danh mục `Disease` và `Treatment` trước khi Camera gửi ảnh; backend map nhãn AI về bệnh trong danh mục (`npm run seed` nạp sẵn danh mục classifier).
 - Với firmware trong repo, đăng ký cảm biến đất, DHT11 và bơm theo danh sách phần cứng đã lắp; firmware không có lệnh `device/probe`. Backend sinh `deviceCode` cho hồ sơ, còn `nodeCode` phải khớp giá trị ghi trong NVS bằng công cụ provision. Các Node có sẵn từ SQL demo chưa có principal trong Broker; vào Quản lý Node và dùng nút chìa khóa để tạo credential cho từng Node trước khi dùng ESP32 thật. Backend hỗ trợ SENSOR, PUMP, FAN; firmware này chỉ điều khiển SENSOR và PUMP, không có quạt/còi/đèn.
 - Nếu database đã tồn tại từ bản trước, chạy mỗi migration còn thiếu đúng một lần. Chạy các migration còn thiếu theo thứ tự phụ thuộc: `20261027_device_probe_lifecycle.sql`, `20261027_device_lifecycle_timestamp.sql`, `20261027_simplify_device_evidence.sql`, `20261026_external_ai_result_images.sql`, `20261027_firmware_v12_fan_node_restore.sql`, rồi `20261102_node_mqtt_accounts_explicit_activation.sql`. Không chạy lại migration đã áp dụng. Migration firmware bổ sung loại `FAN`, boot counter/uptime và khóa chống trùng theo seq. Migration `20261102_node_mqtt_accounts_explicit_activation.sql` bổ sung tài khoản MQTT ở cấp Node và trường chờ ACK kích hoạt Device. Chỉ chạy mỗi migration một lần trên DB hiện có, sau khi backup. Schema demo mới đã có các cột tương ứng.
 - Đăng ký thiết bị trong trang Admin theo đúng GPIO và metric trong `firmware/README.md`. `nodeCode` phải khớp giá trị ghi vào NVS. Không dùng quy trình probe cũ để đăng ký phần cứng thật.
@@ -92,5 +91,14 @@ Sau khi giải nén, chạy `npm install` trong `Backend` và `Frontend`; trong 
 ## Identifier generation
 
 - `nodeCode` do Backend cấp khi Admin tạo Node. Nạp chính xác mã này qua `firmware/tools/provision.py` và dùng làm `{nodeCode}` trong topic MQTT `sf/{nodeCode}/...`.
-- `deviceCode` do Backend sinh cho hồ sơ thiết bị con; telemetry phẳng của firmware được ánh xạ qua `config.metrics`, không yêu cầu ESP32 publish `deviceCode` cho từng số đo.
+- `deviceCode` mới có dạng `DEV-001`, `DEV-002`... theo ID tự tăng; các mã cũ được giữ nguyên; telemetry phẳng của firmware được ánh xạ qua `config.metrics`, không yêu cầu ESP32 publish `deviceCode` cho từng số đo.
 - MQTT username/password là credential riêng của từng Node, không phải `nodeCode`; Backend không lưu password rõ trong MySQL. Xem `Backend/docs/mosquitto-acl.example`.
+
+
+## Camera HTTP image ingestion (Cloudinary)
+
+Camera/Agent gửi ảnh trực tiếp tới `POST /api/camera/media` bằng `multipart/form-data` (`metadata` JSON + `file`) và `Authorization: Bearer <camera-token>`. Admin cấp token một lần qua `POST /api/camera/tokens/:cameraId`; server chỉ lưu hash token. Backend gọi AI API, upload ảnh lên Cloudinary, rồi lưu kết quả AI cùng `imageUrl`, `cloudinaryPublicId`, `imageSha256` vào `leafAnalyses`. Xem `Backend/docs/CAMERA_HTTP_CLOUDINARY_FLOW.md`.
+
+Cần cấu hình `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `AI_API_URL`, `AI_API_KEY`. Với database đã tồn tại, chạy `Backend/database/migrations/20261115_camera_http_cloudinary.sql`.
+
+Nếu chưa cấu hình đủ AI + Cloudinary, Backend tự chuyển sang chế độ fallback: ảnh/video lưu trên đĩa (`CAMERA_IMAGE_STORAGE_DIR`) + bảng `camera_media` (migration `20261115_camera_media.sql`), xem qua `GET /api/camera/media`. Agent điện thoại nằm trong `phone-camera/`.

@@ -8,33 +8,31 @@ const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 // ---- Mock models trước khi require app ----
-const mockDb = { tokens: [], media: [] };
+const CAM = 'CAM-001';
+const mockDb = { tokens: [], media: [], analyses: [] };
 
 function resetMockDb() {
     mockDb.tokens.length = 0;
     mockDb.media.length = 0;
+    mockDb.analyses.length = 0;
 }
 
-// Tạo 1 camera token test
-function seedToken(cameraId = 'TEST-CAM-01') {
+// Tạo 1 camera token test (deviceId = 1 → Device CAM-001)
+function seedToken() {
     const raw = crypto.randomBytes(32).toString('base64url');
     const hash = crypto.createHash('sha256').update(raw).digest('hex');
-    mockDb.tokens.push({ id: 1, cameraId, tokenHash: hash, label: 'test', isActive: true });
+    mockDb.tokens.push({ deviceId: 1, tokenHash: hash, revokedAt: null, expiresAt: null, save: async () => {} });
     return raw;
 }
 
-// Mock CameraToken
 const CameraTokenMock = {
-    unscoped: () => CameraTokenMock,
-    findAll: async ({ where } = {}) =>
-        mockDb.tokens.filter((t) => (where?.isActive === undefined || t.isActive === where.isActive)),
-    findOne: async ({ where }) =>
-        mockDb.tokens.find((t) => (where.cameraId ? t.cameraId === where.cameraId : false)) || null,
-    create: async (data) => { const r = { id: mockDb.tokens.length + 1, ...data, toJSON: () => r }; mockDb.tokens.push(r); return r; },
-    findAll: async (opts) => {
-        if (opts?.where?.isActive !== undefined) return mockDb.tokens.filter((t) => t.isActive === opts.where.isActive);
-        return mockDb.tokens;
-    },
+    findOne: async ({ where }) => mockDb.tokens.find((t) => t.tokenHash === where.tokenHash) || null,
+};
+const DeviceMock = {
+    findByPk: async (id) => (id === 1 ? { id: 1, deviceCode: CAM, type: 'CAMERA', lifecycle: 'REGISTERED' } : null),
+};
+const LeafAnalysisMock = {
+    findOne: async ({ where }) => mockDb.analyses.find((a) => a.eventId === where.eventId) || null,
 };
 const CameraMediaMock = {
     findOne: async ({ where }) => mockDb.media.find((m) => m.eventId === where.eventId) || null,
@@ -42,11 +40,17 @@ const CameraMediaMock = {
     findAndCountAll: async () => ({ count: mockDb.media.length, rows: mockDb.media }),
 };
 
-// Patch require cache
-const modelsPath = require.resolve('../src/models');
-require(modelsPath); // load once
-const models = require(modelsPath);
+// Ép chế độ fallback lưu đĩa và giới hạn nhỏ để test 413 (phải đặt trước khi nạp middleware upload).
+const env = require('../src/config/env');
+env.ai.apiUrl = '';
+env.ai.apiKey = '';
+env.camera.imageMaxBytes = 4096;
+
+// Patch models (camera-auth/controller destructure models khi được require)
+const models = require('../src/models');
 models.CameraToken = CameraTokenMock;
+models.Device = DeviceMock;
+models.LeafAnalysis = LeafAnalysisMock;
 models.CameraMedia = CameraMediaMock;
 
 // Mock storage
@@ -121,7 +125,7 @@ describe('Camera upload endpoint', () => {
         const fileData = crypto.randomBytes(100);
         const sha = crypto.createHash('sha256').update(fileData).digest('hex');
         const { body, contentType } = buildMultipart(
-            { eventId: 'e1', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
+            { eventId: 'e1', cameraId: CAM, sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
             fileData,
         );
         const res = await request(server, {
@@ -136,7 +140,7 @@ describe('Camera upload endpoint', () => {
         const fileData = crypto.randomBytes(200);
         const sha = crypto.createHash('sha256').update(fileData).digest('hex');
         const { body, contentType } = buildMultipart(
-            { schemaVersion: 2, eventId: 'ev-001', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg', capturedAt: new Date().toISOString() },
+            { schemaVersion: 2, eventId: 'ev-001', cameraId: CAM, sha256: sha, mediaType: 'image', mimeType: 'image/jpeg', capturedAt: new Date().toISOString() },
             fileData,
         );
         const res = await request(server, {
@@ -155,9 +159,9 @@ describe('Camera upload endpoint', () => {
         const fileData = crypto.randomBytes(50);
         const sha = crypto.createHash('sha256').update(fileData).digest('hex');
         // Seed existing media
-        mockDb.media.push({ eventId: 'ev-dup', cameraId: 'TEST-CAM-01', sha256: sha });
+        mockDb.media.push({ eventId: 'ev-dup', cameraId: CAM, sha256: sha });
         const { body, contentType } = buildMultipart(
-            { eventId: 'ev-dup', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
+            { eventId: 'ev-dup', cameraId: CAM, sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
             fileData,
         );
         const res = await request(server, {
@@ -187,7 +191,7 @@ describe('Camera upload endpoint', () => {
     it('rejects sha256 mismatch', async () => {
         const fileData = crypto.randomBytes(50);
         const { body, contentType } = buildMultipart(
-            { eventId: 'ev-sha', cameraId: 'TEST-CAM-01', sha256: 'a'.repeat(64), mediaType: 'image', mimeType: 'image/jpeg' },
+            { eventId: 'ev-sha', cameraId: CAM, sha256: 'a'.repeat(64), mediaType: 'image', mimeType: 'image/jpeg' },
             fileData,
         );
         const res = await request(server, {
@@ -196,5 +200,39 @@ describe('Camera upload endpoint', () => {
             body,
         });
         assert.equal(res.status, 400);
+    });
+    function upload(meta, fileData, mime = 'image/jpeg', auth = token) {
+        const { body, contentType } = buildMultipart(meta, fileData, mime);
+        return request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: `Bearer ${auth}`, 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+    }
+
+    it('rejects oversize file with 413', async () => {
+        const res = await upload({ eventId: 'ev-big', cameraId: CAM }, crypto.randomBytes(8192));
+        assert.equal(res.status, 413);
+    });
+
+    it('rejects unsupported mime with 415', async () => {
+        const res = await upload({ eventId: 'ev-txt', cameraId: CAM }, Buffer.from('hello'), 'text/plain');
+        assert.equal(res.status, 415);
+    });
+
+    it('treats eventId already in leafAnalyses as duplicate', async () => {
+        const fileData = crypto.randomBytes(64);
+        const sha = crypto.createHash('sha256').update(fileData).digest('hex');
+        mockDb.analyses.push({ id: 9, eventId: 'ev-ai', deviceId: 1, imageSha256: sha });
+        const res = await upload({ eventId: 'ev-ai', cameraId: CAM, sha256: sha }, fileData);
+        assert.equal(res.status, 200);
+        assert.equal(res.body.status, 'duplicate');
+        assert.equal(mockDb.media.length, 0);
+    });
+
+    it('rejects eventId owned by another camera with 409', async () => {
+        mockDb.media.push({ eventId: 'ev-other', cameraId: 'CAM-999', sha256: 'b'.repeat(64) });
+        const res = await upload({ eventId: 'ev-other', cameraId: CAM }, crypto.randomBytes(32));
+        assert.equal(res.status, 409);
     });
 });

@@ -1,13 +1,14 @@
-const { Node, Device, sequelize } = require('../models');
+const { Node, Device, DeviceCommand, sequelize } = require('../models');
 const ApiError = require('../utils/apiError');
 const { pick } = require('../utils/helpers');
 const audit = require('../services/audit.service');
 const nodeService = require('../services/node.service');
 const mqttDynsec = require('../services/mqtt-dynsec.service');
 const env = require('../config/env');
-const { createWithGeneratedCode } = require('../services/code-generator');
+const { createWithSequentialCode } = require('../services/code-generator');
 const { normalizeMac, issueToken, matchesToken } = require('../services/node-claim.service');
 const provisioning = require('../services/node-provisioning.service');
+const commandService = require('../services/command.service');
 
 const { STATE } = provisioning;
 const deviceInclude = [{ model: Device, as: 'devices', attributes: ['id', 'deviceCode', 'name', 'type', 'lifecycle'] }];
@@ -105,6 +106,34 @@ const loadDevices = (nodeId, transaction) => Device.findAll({
     where: { nodeId }, attributes: ['deviceCode', 'type', 'gpioPin', 'config', 'lifecycle'], transaction,
 });
 
+// Trước khi thu hồi: tắt các cơ cấu chấp hành đang bật và chờ ACK ngắn (tối đa 5 giây/thiết bị).
+async function requestSafeStopForNode(node) {
+    const result = { requested: 0, acknowledged: 0, failed: 0, skipped: 0, details: [] };
+    const actuators = await Device.findAll({
+        where: { nodeId: node.id, type: ['PUMP', 'FAN'], lifecycle: ['ACTIVE', 'FAULT', 'MAINTENANCE'] },
+    });
+    for (const device of actuators) {
+        if (!device.isOn) { result.skipped += 1; continue; }
+        try {
+            const command = await commandService.issue({ device, turnOn: false, source: 'ALERT' });
+            result.requested += 1;
+            const deadline = Date.now() + Math.min(env.commandAckTimeoutSec * 1000, 5000);
+            let current = command;
+            while (current.status === 'SENT' && Date.now() < deadline) {
+                await new Promise((resolve) => setTimeout(resolve, 200));
+                current = await DeviceCommand.findByPk(command.id);
+            }
+            if (current?.status === 'ACKED') result.acknowledged += 1;
+            else result.failed += 1;
+            result.details.push({ deviceCode: device.deviceCode, commandUuid: command.commandUuid, status: current?.status || 'UNKNOWN' });
+        } catch (error) {
+            result.failed += 1;
+            result.details.push({ deviceCode: device.deviceCode, status: 'NOT_SENT', reason: String(error.message || error).slice(0, 200) });
+        }
+    }
+    return result;
+}
+
 exports.list = async (req, res) => {
     const nodes = await Node.findAll({ include: deviceInclude, order: [['id', 'ASC']] });
     res.json({ data: nodes.map(present) });
@@ -127,7 +156,7 @@ exports.create = async (req, res) => {
 
     let created;
     try {
-        created = await createWithGeneratedCode({
+        created = await createWithSequentialCode({
             prefix: 'NODE', Model: Node, field: 'nodeCode',
             values: {
                 name: normalizedName,
@@ -138,8 +167,10 @@ exports.create = async (req, res) => {
             },
         });
     } catch (error) {
-        if (error.code === 'CODE_GENERATION_EXHAUSTED') throw ApiError.conflict('Không thể sinh mã Node duy nhất; vui lòng thử lại.');
-        if (error.name === 'SequelizeUniqueConstraintError' && mac) throw ApiError.coded(409, 'MAC_IN_USE', 'MAC này đã được gắn với một Node khác');
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            if (mac) throw ApiError.coded(409, 'MAC_IN_USE', 'MAC này đã được gắn với một Node khác (hoặc trùng mã Node tuần tự).');
+            throw ApiError.conflict('Mã Node tuần tự đã tồn tại. Hãy kiểm tra dữ liệu Node cũ trước khi tạo tiếp.');
+        }
         throw error;
     }
     const node = created.record;
@@ -337,6 +368,16 @@ exports.issueMqttCredentials = async (req, res) => {
 
 // Thu hồi: khóa tài khoản Broker (ngắt phiên) trước rồi mới đánh dấu trong DB. Gọi lại khi đã thu hồi là no-op.
 exports.revoke = async (req, res) => {
+    // Gửi lệnh dừng NGOÀI transaction (chờ ACK tới vài giây, không giữ khóa dòng).
+    // Node offline hoặc không ACK: vẫn thu hồi nhưng báo rõ trong safeStop.
+    const current = await find(req.params.id);
+    let safeStop = null;
+    if (!current.isRevoked) {
+        safeStop = current.isOnline ? await requestSafeStopForNode(current) : {
+            requested: 0, acknowledged: 0, failed: 0, skipped: 0,
+            details: [{ status: 'SKIPPED_NODE_OFFLINE', reason: 'Không thể gửi lệnh dừng khi Node offline' }],
+        };
+    }
     const { node, alreadyRevoked } = await sequelize.transaction(async (transaction) => {
         const node = await findLocked(req.params.id, transaction);
         if (node.isRevoked) return { node, alreadyRevoked: true };
@@ -358,9 +399,12 @@ exports.revoke = async (req, res) => {
     });
     if (!alreadyRevoked) {
         await nodeService.markOffline(node, 'node bị thu hồi');
-        await audit.log(req, { action: 'node.revoke', entityType: 'node', entityId: node.id, detail: { mqttUsername: node.mqttUsername, brokerAccountDisabled: Boolean(node.mqttUsername) } });
+        await audit.log(req, { action: 'node.revoke', entityType: 'node', entityId: node.id, detail: { mqttUsername: node.mqttUsername, brokerAccountDisabled: Boolean(node.mqttUsername), safeStop } });
     }
-    res.json({ data: present(node), message: alreadyRevoked ? 'Node đã ở trạng thái thu hồi.' : 'Đã thu hồi Node, khóa và ngắt phiên MQTT của tài khoản Node.' });
+    let message = 'Đã thu hồi Node, gửi lệnh dừng cho các cơ cấu chấp hành đang bật và khóa/ngắt phiên MQTT.';
+    if (alreadyRevoked) message = 'Node đã ở trạng thái thu hồi.';
+    else if (safeStop?.failed) message = 'Đã thu hồi Node và khóa MQTT. Một số thiết bị chưa xác nhận lệnh dừng; cần kiểm tra an toàn tại hiện trường.';
+    res.json({ data: present(node), safeStop, message });
 };
 
 /*

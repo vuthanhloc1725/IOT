@@ -55,7 +55,7 @@ exports.list = async (req, res) => {
 
     const data = rows.map((row) => {
         const item = row.toJSON();
-        return { ...item, imageUrl: item.imagePath ? `/api/analyses/${item.id}/image` : null };
+        return { ...item, imageUrl: item.imageUrl || (item.imagePath ? `/api/analyses/${item.id}/image` : null) };
     });
     res.json({ data, meta: meta(page, limit, count) });
 };
@@ -72,7 +72,7 @@ exports.get = async (req, res) => {
     const treatments = [...(analysis.disease?.treatments || [])];
     res.json({
         data: analysis,
-        imageUrl: analysis.imagePath ? `/api/analyses/${analysis.id}/image` : null,
+        imageUrl: analysis.imageUrl || (analysis.imagePath ? `/api/analyses/${analysis.id}/image` : null),
         recommendations: {
             biological: treatments.filter((treatment) => treatment.type === 'BIOLOGICAL'),
             chemical: treatments.filter((treatment) => treatment.type === 'CHEMICAL'),
@@ -83,10 +83,11 @@ exports.get = async (req, res) => {
 // Ảnh không được public static: yêu cầu JWT và áp dụng cùng phạm vi quyền của kết quả nhận diện.
 exports.image = async (req, res) => {
     const analysis = await LeafAnalysis.findByPk(req.params.id, {
-        attributes: ['id', 'deviceId', 'imagePath'],
+        attributes: ['id', 'deviceId', 'imagePath', 'imageUrl'],
     });
     if (!analysis) throw ApiError.notFound('Không tìm thấy kết quả phân tích');
     if (analysis.deviceId) await getDeviceForUser(req.user, analysis.deviceId);
+    if (analysis.imageUrl) return res.redirect(302, analysis.imageUrl);
     if (!analysis.imagePath) throw ApiError.notFound('Kết quả này chưa có ảnh nhận diện');
 
     const image = await imageStorage.read(analysis.imagePath);
@@ -98,3 +99,4 @@ exports.image = async (req, res) => {
     });
     res.send(image.buffer);
 };
+

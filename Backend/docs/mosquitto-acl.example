@@ -43,7 +43,7 @@
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setClientPassword agri_backend '<BACKEND_MQTT_PASSWORD>'
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addClientRole agri_backend iot_backend_role 1
 #
-#    Backend receives Node messages and AI result messages:
+#    Backend receives Node messages:
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/telemetry' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry/backfill' allow 1
@@ -62,8 +62,6 @@
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/config/ack' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/device/probe/ack' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/device/probe/ack' allow 1
-#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'iot/ai/result' allow 1
-#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribeLiteral 'iot/ai/result' allow 1
 #
 #    Backend sends commands/config/probe requests to Nodes:
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/cmd' allow 1
