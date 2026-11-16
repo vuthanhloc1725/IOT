@@ -7,6 +7,7 @@ const ApiError = require('../utils/apiError');
 const { userView } = require('../utils/helpers');
 const audit = require('../services/audit.service');
 
+// JWT stateless đơn giản: chỉ lưu id và role; frontend lưu token trong localStorage.
 const sign = (u) => jwt.sign({ sub: u.id, role: u.role }, env.jwt.secret, { expiresIn: env.jwt.expiresIn });
 
 exports.login = async (req, res) => {
@@ -35,6 +36,6 @@ exports.changePassword = async (req, res) => {
     if (!(await bcrypt.compare(String(old_password), user.passwordHash))) throw ApiError.badRequest('Mật khẩu cũ không đúng');
     user.passwordHash = await bcrypt.hash(String(new_password), 10);
     await user.save();
-    await audit.log(req, { action: 'auth.change_password', entityType: 'user', entityId: user.id });
-    res.json({ data: { message: 'Đã đổi mật khẩu' } });
+    await audit.log(req, { action: 'auth.change_password', entityType: 'user', entityId: user.id, detail: { sessionsRevoked: false } });
+    res.json({ data: { message: 'Đã đổi mật khẩu thành công. Hãy đăng nhập lại nếu bạn muốn làm mới phiên hiện tại.' } });
 };

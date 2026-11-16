@@ -30,5 +30,6 @@ exports.errorHandler = (err, req, res, next) => {
         console.error('[error]', err);
         message = process.env.NODE_ENV === 'production' ? 'Lỗi máy chủ' : message;
     }
-    res.status(status).json({ error: { status, message, details } });
+    const code = err instanceof ApiError ? err.code : undefined;
+    res.status(status).json({ error: { status, ...(code ? { code } : {}), message, details } });
 };

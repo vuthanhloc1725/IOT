@@ -1,38 +1,101 @@
-# Ví dụ ACL cho Mosquitto. Đổi prefix, username và nodeCode theo dự án của bạn.
-# ACL chỉ có hiệu lực nếu broker bật xác thực và nạp file ACL này.
-# Ví dụ phần liên quan trong mosquitto.conf:
-#   allow_anonymous false
-#   password_file /etc/mosquitto/passwd
-#   acl_file /etc/mosquitto/acl
-#   max_packet_size 8388608
-# Tạo tài khoản bằng mosquitto_passwd; không commit password file thật vào Git.
-
-# Tài khoản backend: đọc telemetry/heartbeat/status/ACK từ mọi Node,
-# kết quả AI từ topic riêng, và chỉ publish command/config xuống Node.
-user agri_backend
-topic read agri/+/telemetry
-topic read agri/+/heartbeat
-topic read agri/+/status
-topic read agri/+/command/ack
-topic read agri/+/config/ack
-topic read agri/ai/result
-topic write agri/+/command
-topic write agri/+/config
-
-# Tài khoản publisher bên thứ ba: chỉ được gửi kết quả nhận diện + ảnh.
-user external_ai
-topic write agri/ai/result
-
-# Tài khoản riêng cho Node NODE-01.
-user NODE-01
-topic write agri/NODE-01/telemetry
-topic write agri/NODE-01/heartbeat
-topic write agri/NODE-01/status
-topic write agri/NODE-01/command/ack
-topic write agri/NODE-01/config/ack
-topic read agri/NODE-01/command
-topic read agri/NODE-01/config
-
-# Tạo block tương tự cho từng Node.
-# Không cấp cho Node quyền write agri/+/command/ack hoặc topic của Node khác.
-# Nếu MQTT_TOPIC_PREFIX khác agri, thay prefix nhất quán trong ACL và publisher.
+# MQTT SECURITY CONFIGURATION — MOSQUITTO DYNAMIC SECURITY
+#
+# Project mode: one MQTT username/password + one least-privilege ACL role per Node.
+# Backend creates the Node account/role automatically through the Dynamic Security control API.
+# Do NOT manually create one shared MQTT username for all Node ESP32 boards.
+#
+# 1) mosquitto.conf (paths vary by OS/container image):
+#    allow_anonymous false
+#    per_listener_settings false
+#    plugin /usr/lib/x86_64-linux-gnu/mosquitto_dynamic_security.so
+#    plugin_opt_config_file /mosquitto/data/dynamic-security.json
+#    listener 8883
+#    certfile /mosquitto/certs/server.crt
+#    keyfile /mosquitto/certs/server.key
+#    tls_version tlsv1.2
+#    # MAC/token registration and claim require MQTT_URL=mqtts://<broker-host>:8883.
+#    # Private CA: set MQTT_CA_FILE in Backend and provide the same CA to ESP32.
+#    # Local development setup: cd Backend && npm run mqtt:setup
+#    # See docs/LOCAL_MQTT_TLS.md.
+#
+# 2) Create the initial Dynamic Security administrator once (Mosquitto 2.0+):
+#    mosquitto_ctrl dynsec init /mosquitto/data/dynamic-security.json iot_dynsec_admin
+#    The command prompts for a password. Keep this account for broker administration only.
+#
+# 3) Start/restart Mosquitto with the plugin enabled. Use a TLS-protected control connection
+#    for all mosquitto_ctrl commands in production. The plugin's JSON file is sensitive and
+#    must be persistent, writable by Mosquitto, backed up, and never committed to Git.
+#
+# 3a) Set least-privilege defaults before creating application clients. Dynamic Security's
+#     default publishClientReceive and unsubscribe permissions are ALLOW unless changed;
+#     leaving that default would let a Node receive messages outside its own ACL topics.
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setDefaultACLAccess publishClientSend deny
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setDefaultACLAccess publishClientReceive deny
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setDefaultACLAccess subscribe deny
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setDefaultACLAccess unsubscribe deny
+#
+# 4) Create a restricted role and principal for the Backend service.
+#    The examples below use localhost; add -h/-p/-u/-P/- certificate options for your broker.
+#    Use a long random password and place it in Backend/.env as MQTT_USERNAME/PASSWORD.
+#
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec createRole iot_backend_role
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec createClient agri_backend
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setClientPassword agri_backend '<BACKEND_MQTT_PASSWORD>'
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addClientRole agri_backend iot_backend_role 1
+#
+#    Backend receives Node messages and AI result messages:
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/telemetry' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry/backfill' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/telemetry/backfill' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/heartbeat' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/heartbeat' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/status' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/status' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/config' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/config' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/cmd/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/cmd/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/command/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/command/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/config/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/config/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/device/probe/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/device/probe/ack' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'iot/ai/result' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribeLiteral 'iot/ai/result' allow 1
+#
+#    Backend sends commands/config/probe requests to Nodes:
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/cmd' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/config' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/device/probe' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive '$CONTROL/dynamic-security/v1/response' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribeLiteral '$CONTROL/dynamic-security/v1/response' allow 1
+#
+# 5) The Backend's Dynamic Security admin account is separate from its normal MQTT account:
+#    MQTT_USERNAME=agri_backend
+#    MQTT_PASSWORD=<BACKEND_MQTT_PASSWORD>
+#    MQTT_DYNSEC_ENABLED=true
+#    MQTT_DYNSEC_ADMIN_USERNAME=iot_dynsec_admin
+#    MQTT_DYNSEC_ADMIN_PASSWORD=<DYNSEC_ADMIN_PASSWORD>
+#
+# 6) MAC registration returns a short-lived claim token. Successful claim provisions:
+#    - a distinct username (node_<nodeCode>), random password, and role;
+#    - publish/send ACLs only for sf/<nodeCode>/telemetry, heartbeat, status, config,
+#      ACK and backfill topics;
+#    - subscribe/receive ACLs only for sf/<nodeCode>/cmd, config, device/probe.
+#    Claim returns credentials once to the provisioning tool; rotation returns a new password.
+#    Node creation with a MAC returns no MQTT password. Passwords are not stored in MySQL.
+#    See DEVICE_CLAIM_LIFECYCLE.md for the claim and firmware provisioning flow.
+#
+# 7) Revoking a Node uses Dynamic Security disableClient. Mosquitto disconnects clients
+#    currently connected with that username and denies subsequent connections. Restoring
+#    the Node uses enableClient. The firmware reuses its existing username/password; a fresh
+#    heartbeat is required before the Web Admin reports it online.
+#
+# For a device-level decommission, do NOT revoke the Node MQTT account: other child Devices
+#    share that Node's transport identity. Backend blocks commands/data processing for that
+#    individual device using its deviceCode and lifecycle state.
+#
+# AI camera image transport remains outside this per-Node telemetry account change in this
+#    release, consistent with the project's currently scoped AI integration.

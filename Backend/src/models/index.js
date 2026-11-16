@@ -32,6 +32,8 @@ const Treatment = require('./treatment.model')(sequelize, DataTypes);
 const LeafAnalysis = require('./leafAnalysis.model')(sequelize, DataTypes);
 const Alert = require('./alert.model')(sequelize, DataTypes);
 const DeviceCommand = require('./deviceCommand.model')(sequelize, DataTypes);
+const CameraToken = require('./cameraToken.model')(sequelize, DataTypes);
+const CameraMedia = require('./cameraMedia.model')(sequelize, DataTypes);
 
 // ---------- Quan hệ: người dùng ----------
 // Nhật ký thao tác (xóa user thì giữ log, userId = NULL)
@@ -86,6 +88,10 @@ LeafAnalysis.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
 Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments' });
 Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
 
+// ---------- Quan hệ: camera phone ----------
+CameraToken.hasMany(CameraMedia, { foreignKey: 'cameraId', sourceKey: 'cameraId', as: 'media' });
+CameraMedia.belongsTo(CameraToken, { foreignKey: 'cameraId', targetKey: 'cameraId', as: 'camera' });
+
 // ---------- Hàm tiện ích ----------
 async function connect() {
   await sequelize.authenticate();
@@ -107,4 +113,6 @@ module.exports = {
   LeafAnalysis,
   Alert,
   DeviceCommand,
+  CameraToken,
+  CameraMedia,
 };

@@ -48,7 +48,7 @@ exports.list = async (req, res) => {
         order: [['id', 'ASC']]
     });
 
-    res.json({ data: rows, meta: meta(page, limit, count) });
+    res.json({ data: rows.map((row) => ({ ...userView(row), devices: row.devices || [] })), meta: meta(page, limit, count) });
 };
 
 exports.get = async (req, res) => {
@@ -63,7 +63,7 @@ exports.get = async (req, res) => {
 
     if (!user) throw ApiError.notFound('Không tìm thấy người dùng');
 
-    res.json({ data: user });
+    res.json({ data: { ...userView(user), devices: user.devices || [] } });
 };
 
 exports.create = async (req, res) => {
@@ -110,6 +110,8 @@ exports.update = async (req, res) => {
     const { email, fullName, role, isActive, password } = req.body || {};
 
     const isSelf = String(user.id) === String(req.user.id);
+    const previousRole = user.role;
+    const previousIsActive = user.isActive;
 
     if (isSelf && ((role && role !== user.role) || isActive === false)) {
         throw ApiError.badRequest(
@@ -139,7 +141,9 @@ exports.update = async (req, res) => {
 
     await user.save();
 
-    await socketService.refreshUserRooms(user.id);
+    // Với JWT stateless: cập nhật lại room nếu role/phạm vi thay đổi; chỉ ngắt socket khi tài khoản bị khóa.
+    if (!user.isActive) socketService.disconnectUser(user.id);
+    else await socketService.refreshUserRooms(user.id);
 
     await audit.log(req, {
         action: 'user.update',
@@ -167,7 +171,7 @@ exports.deactivate = async (req, res) => {
 
     user.isActive = false;
     await user.save();
-    await socketService.refreshUserRooms(user.id);
+    socketService.disconnectUser(user.id);
 
     await audit.log(req, {
         action: 'user.deactivate',

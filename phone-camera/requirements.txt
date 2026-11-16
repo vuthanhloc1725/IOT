@@ -1,0 +1,3 @@
+# Only needed when mqtt.enabled=true (on-demand capture commands, heartbeat).
+# HTTPS upload uses the Python standard library.
+paho-mqtt>=2.1,<3

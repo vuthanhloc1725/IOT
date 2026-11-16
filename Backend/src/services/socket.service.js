@@ -17,7 +17,7 @@ exports.init = (httpServer) => {
       const token = socket.handshake.auth?.token;
       const payload = jwt.verify(token, env.jwt.secret);
       const user = await User.findByPk(payload.sub);
-      if (!user || !user.isActive) throw new Error('inactive');
+      if (!user || !user.isActive) throw new Error('inactive_user');
       socket.user = user;
       socket.data.userId = user.id;
       next();
@@ -50,6 +50,16 @@ exports.emitAdmin = (event, payload) => io && io.to('all').emit(event, payload);
 // Dùng cho kết quả AI/ảnh nhận diện không gắn với một deviceId cụ thể.
 exports.emitAuthenticated = (event, payload) => io && io.to('authenticated').emit(event, payload);
 
+
+
+// Disconnect currently connected Socket.IO sessions after role/account changes.
+// Logout itself is client-side (clear localStorage); this does not revoke copied JWTs.
+exports.disconnectUser = (userId) => {
+  if (!io) return;
+  for (const client of io.sockets.sockets.values()) {
+    if (Number(client.data.userId ?? client.user?.id) === Number(userId)) client.disconnect(true);
+  }
+};
 
 // Refresh live Socket.IO access after a role, account-state or user-device assignment changes.
 exports.refreshUserRooms = async (userId) => {

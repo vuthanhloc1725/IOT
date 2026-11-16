@@ -1,0 +1,21 @@
+#pragma once
+
+// Example only. The claim tool writes board-specific device_config.h.
+#define EXPECTED_WIFI_MAC "00:00:00:00:00:00"
+#define NODE_CODE "NODE-0123456789ABCDEF"
+#define SOIL_DEVICE_CODE "DEV-0000000000000001"
+#define DHT_DEVICE_CODE "DEV-0000000000000002"
+#define PUMP_DEVICE_CODE "DEV-0000000000000003"
+#define WIFI_SSID "TP-Link_4F4E"
+#define WIFI_PASSWORD "51258900"
+#define MQTT_HOST "192.168.0.103"
+//#define MQTT_HOST "broker.example.org"
+#define MQTT_PORT 1883
+#define MQTT_USERNAME "REPLACE_MQTT_USERNAME"
+#define MQTT_PASSWORD "REPLACE_MQTT_PASSWORD"
+#define MQTT_TOPIC_PREFIX "sf"
+#define NTP_SERVER "pool.ntp.org"
+#define MQTT_CA_PEM "-----BEGIN CERTIFICATE-----\nREPLACE_CA\n-----END CERTIFICATE-----\n"
+#define SOIL_DRY_ADC 3000
+#define SOIL_WET_ADC 1000
+#define PUMP_ACTIVE_LEVEL LOW

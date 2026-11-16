@@ -1,0 +1,200 @@
+/**
+ * Integration test cho POST /api/camera/media.
+ * Chạy được không cần database (mock Sequelize models).
+ */
+const crypto = require('node:crypto');
+const http = require('node:http');
+const { describe, it, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert/strict');
+
+// ---- Mock models trước khi require app ----
+const mockDb = { tokens: [], media: [] };
+
+function resetMockDb() {
+    mockDb.tokens.length = 0;
+    mockDb.media.length = 0;
+}
+
+// Tạo 1 camera token test
+function seedToken(cameraId = 'TEST-CAM-01') {
+    const raw = crypto.randomBytes(32).toString('base64url');
+    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    mockDb.tokens.push({ id: 1, cameraId, tokenHash: hash, label: 'test', isActive: true });
+    return raw;
+}
+
+// Mock CameraToken
+const CameraTokenMock = {
+    unscoped: () => CameraTokenMock,
+    findAll: async ({ where } = {}) =>
+        mockDb.tokens.filter((t) => (where?.isActive === undefined || t.isActive === where.isActive)),
+    findOne: async ({ where }) =>
+        mockDb.tokens.find((t) => (where.cameraId ? t.cameraId === where.cameraId : false)) || null,
+    create: async (data) => { const r = { id: mockDb.tokens.length + 1, ...data, toJSON: () => r }; mockDb.tokens.push(r); return r; },
+    findAll: async (opts) => {
+        if (opts?.where?.isActive !== undefined) return mockDb.tokens.filter((t) => t.isActive === opts.where.isActive);
+        return mockDb.tokens;
+    },
+};
+const CameraMediaMock = {
+    findOne: async ({ where }) => mockDb.media.find((m) => m.eventId === where.eventId) || null,
+    create: async (data) => { const r = { ...data, toJSON: () => r }; mockDb.media.push(r); return r; },
+    findAndCountAll: async () => ({ count: mockDb.media.length, rows: mockDb.media }),
+};
+
+// Patch require cache
+const modelsPath = require.resolve('../src/models');
+require(modelsPath); // load once
+const models = require(modelsPath);
+models.CameraToken = CameraTokenMock;
+models.CameraMedia = CameraMediaMock;
+
+// Mock storage
+const storagePath = require.resolve('../src/services/camera-media.storage');
+require.cache[storagePath] = {
+    id: storagePath, filename: storagePath, loaded: true,
+    exports: {
+        save: async () => 'mock-uuid.jpg',
+        read: async () => ({ buffer: Buffer.from('jpg'), mimeType: 'image/jpeg' }),
+        remove: async () => {},
+        directory: '/tmp/test-camera-media',
+    },
+};
+
+const app = require('../app');
+
+// ---- Helpers ----
+
+function buildMultipart(metadata, fileData, fileMime = 'image/jpeg') {
+    const boundary = '----testboundary123';
+    const metaJson = JSON.stringify(metadata);
+    const parts = [
+        `--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n${metaJson}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="test.jpg"\r\nContent-Type: ${fileMime}\r\n\r\n`,
+    ];
+    const head = Buffer.from(parts[0] + parts[1], 'utf-8');
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8');
+    return { body: Buffer.concat([head, fileData, tail]), contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+function request(server, { method, path, headers, body }) {
+    return new Promise((resolve, reject) => {
+        const addr = server.address();
+        const req = http.request({ hostname: '127.0.0.1', port: addr.port, method, path, headers }, (res) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => {
+                const raw = Buffer.concat(chunks).toString();
+                let json;
+                try { json = JSON.parse(raw); } catch { json = null; }
+                resolve({ status: res.statusCode, headers: res.headers, body: json, raw });
+            });
+        });
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+    });
+}
+
+// ---- Tests ----
+
+describe('Camera upload endpoint', () => {
+    let server, token;
+
+    before((_, done) => {
+        server = app.listen(0, done);
+    });
+    after((_, done) => {
+        server.close(done);
+    });
+    beforeEach(() => {
+        resetMockDb();
+        token = seedToken();
+    });
+
+    it('rejects missing auth', async () => {
+        const res = await request(server, { method: 'POST', path: '/api/camera/media', headers: {}, body: Buffer.alloc(0) });
+        assert.equal(res.status, 401);
+    });
+
+    it('rejects wrong token', async () => {
+        const fileData = crypto.randomBytes(100);
+        const sha = crypto.createHash('sha256').update(fileData).digest('hex');
+        const { body, contentType } = buildMultipart(
+            { eventId: 'e1', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
+            fileData,
+        );
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: 'Bearer wrong-token', 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+        assert.equal(res.status, 401);
+    });
+
+    it('accepts valid upload and returns stored', async () => {
+        const fileData = crypto.randomBytes(200);
+        const sha = crypto.createHash('sha256').update(fileData).digest('hex');
+        const { body, contentType } = buildMultipart(
+            { schemaVersion: 2, eventId: 'ev-001', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg', capturedAt: new Date().toISOString() },
+            fileData,
+        );
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+        assert.equal(res.status, 201);
+        assert.equal(res.body.status, 'stored');
+        assert.equal(res.body.eventId, 'ev-001');
+        assert.equal(res.body.sha256, sha);
+        assert.equal(mockDb.media.length, 1);
+    });
+
+    it('returns duplicate for same eventId', async () => {
+        const fileData = crypto.randomBytes(50);
+        const sha = crypto.createHash('sha256').update(fileData).digest('hex');
+        // Seed existing media
+        mockDb.media.push({ eventId: 'ev-dup', cameraId: 'TEST-CAM-01', sha256: sha });
+        const { body, contentType } = buildMultipart(
+            { eventId: 'ev-dup', cameraId: 'TEST-CAM-01', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
+            fileData,
+        );
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+        assert.equal(res.status, 200);
+        assert.equal(res.body.status, 'duplicate');
+    });
+
+    it('rejects mismatched cameraId', async () => {
+        const fileData = crypto.randomBytes(50);
+        const sha = crypto.createHash('sha256').update(fileData).digest('hex');
+        const { body, contentType } = buildMultipart(
+            { eventId: 'ev-bad', cameraId: 'WRONG-CAM', sha256: sha, mediaType: 'image', mimeType: 'image/jpeg' },
+            fileData,
+        );
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+        assert.equal(res.status, 403);
+    });
+
+    it('rejects sha256 mismatch', async () => {
+        const fileData = crypto.randomBytes(50);
+        const { body, contentType } = buildMultipart(
+            { eventId: 'ev-sha', cameraId: 'TEST-CAM-01', sha256: 'a'.repeat(64), mediaType: 'image', mimeType: 'image/jpeg' },
+            fileData,
+        );
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/media',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType, 'Content-Length': body.length },
+            body,
+        });
+        assert.equal(res.status, 400);
+    });
+});

@@ -17,8 +17,10 @@ router.get('/:id/commands', device.listCommands);
 router.post('/:id/commands', requireRole('admin', 'operator'), device.sendCommand);
 router.patch('/:id/config', requireRole('admin', 'operator'), device.updateConfig);
 
+// Legacy probe endpoint dành cho firmware đời trước. Firmware v1.2 dùng inventory qua POST /.
+router.post('/probe', requireRole('admin'), device.probeAndRegister);
+router.post('/', requireRole('admin'), device.create); // đăng ký theo inventory Firmware v1.2
 // Tạo/sửa thiết bị: Admin. Operator được đổi vòng đời trong phạm vi thiết bị được gán.
-router.post('/', requireRole('admin'), device.create);
 router.patch('/:id', requireRole('admin'), device.update);
 router.post('/:id/lifecycle', requireRole('admin', 'operator'), device.changeLifecycle);
 

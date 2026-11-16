@@ -15,6 +15,8 @@ module.exports = (sequelize, DataTypes) =>
           return v === null ? null : Number(v);
         },
       },
+      sourceBootCount: { type: DataTypes.INTEGER, allowNull: true },
+      sourceSeq: { type: DataTypes.BIGINT, allowNull: true },
       isBackfilled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       receivedAt: { type: DataTypes.DATE(3), allowNull: false, defaultValue: DataTypes.NOW },
     },

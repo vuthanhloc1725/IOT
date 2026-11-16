@@ -1,27 +1,29 @@
 const mqtt = require('mqtt');
 const env = require('../config/env');
+const mqttTlsOptions = require('../config/mqtt-tls');
 
-const P = env.mqtt.prefix;
-const AI_RESULT_TOPIC = `${P}/ai/result`;
+const P = env.mqtt.firmwarePrefix;
+const AI_RESULT_TOPIC = `${env.mqtt.prefix}/ai/result`;
 let client = null;
 // 5 MiB ảnh Base64 chiếm khoảng 6.7 MiB; chừa thêm dung lượng cho metadata JSON.
 const MAX_MQTT_PAYLOAD_BYTES = Math.max(
     8 * 1024 * 1024,
     Math.ceil(env.ai.imageMaxBytes * 4 / 3) + 256 * 1024
 );
-const ALLOWED_KINDS = new Set(['telemetry', 'heartbeat', 'status', 'command/ack', 'config/ack']);
+const ALLOWED_KINDS = new Set(['telemetry', 'telemetry/backfill', 'heartbeat', 'status', 'config', 'cmd/ack', 'command/ack', 'config/ack', 'device/probe/ack']);
 
 // Topic quy ước:
 // Dịch vụ AI bên thứ ba → backend: {P}/ai/result (JSON + ảnh Base64)
-// Node → server: {P}/{nodeCode}/telemetry | heartbeat | status | command/ack | config/ack
-// Server → node: {P}/{nodeCode}/command | config
+// Firmware v1.2: Node → server {P}/{nodeCode}/telemetry, telemetry/backfill, heartbeat, status, config, cmd/ack
+// Server → Node {P}/{nodeCode}/cmd
 exports.topics = {
     aiResult: AI_RESULT_TOPIC,
-    command: (nodeCode) => `${P}/${nodeCode}/command`,
+    command: (nodeCode) => `${P}/${nodeCode}/cmd`,
     config: (nodeCode) => `${P}/${nodeCode}/config`,
+    deviceProbe: (nodeCode) => `${P}/${nodeCode}/device/probe`,
 };
 
-exports.start = (onMessage) => {
+exports.start = (onMessage, onConnected = null) => {
     if (!env.mqtt.enabled) {
         console.warn('[mqtt] MQTT_ENABLED=false → bỏ qua kết nối broker');
         return;
@@ -34,11 +36,11 @@ exports.start = (onMessage) => {
     client = mqtt.connect(env.mqtt.url, {
         username: env.mqtt.username || undefined,
         password: env.mqtt.password || undefined,
-        clientId: `agri-backend-${process.pid}`,
+        clientId: `iot-backend-${process.pid}`,
         reconnectPeriod: 3000,
         clean: true,
         // When MQTT_URL uses mqtts://, do not accept an untrusted broker certificate.
-        rejectUnauthorized: true,
+        ...mqttTlsOptions(env.mqtt.caFile),
     });
 
     client.on('connect', () => {
@@ -46,16 +48,25 @@ exports.start = (onMessage) => {
         client.subscribe(
             [
                 `${P}/+/telemetry`,
+                `${P}/+/telemetry/backfill`,
+                `${P}/+/config`,
                 `${P}/+/heartbeat`,
                 `${P}/+/status`,
+                `${P}/+/cmd/ack`,
                 `${P}/+/command/ack`,
                 `${P}/+/config/ack`,
+                `${P}/+/device/probe/ack`,
                 AI_RESULT_TOPIC,
             ],
             { qos: 1 },
             (err) => {
                 if (err) console.error('[mqtt] subscribe lỗi:', err.message);
-                else console.log(`[mqtt] đã subscribe topic kết quả AI: ${AI_RESULT_TOPIC}`);
+                else {
+                    console.log(`[mqtt] đã subscribe telemetry/heartbeat/status/config/ACK và kết quả AI: ${AI_RESULT_TOPIC}`);
+                    if (typeof onConnected === 'function') {
+                        Promise.resolve(onConnected()).catch((e) => console.error('[mqtt] lỗi đồng bộ config đang chờ:', e.message || e));
+                    }
+                }
             }
         );
     });

@@ -79,3 +79,17 @@ test('rejects ACK after the configured deadline', () => {
 test('rejects ACK when its command has no trustworthy sentAt', () => {
   assert.equal(authorizeCommandAck(validContext({ cmd: { ...validContext().cmd, sentAt: null } })).reason, 'missing_or_invalid_sent_at');
 });
+
+test('Firmware v1.2 ACK aliases ok/reason and may omit child deviceCode when command UUID is present', () => {
+  const result = normalizeCommandAck({
+    commandId: '550e8400-e29b-41d4-a716-446655440000',
+    action: 'fan',
+    ok: true,
+    reason: 'fan enabled',
+  }, { firmwareCompat: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.ack.commandUuid, '550e8400-e29b-41d4-a716-446655440000');
+  assert.equal(result.ack.deviceCode, null);
+  assert.equal(result.ack.success, true);
+  assert.equal(result.ack.message, 'fan enabled');
+});

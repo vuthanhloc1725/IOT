@@ -40,12 +40,27 @@ CREATE TABLE IF NOT EXISTS `nodes` (
   `isOnline` TINYINT(1) NOT NULL DEFAULT 0,
   `onlineSince` DATETIME(3) NULL,
   `lastHeartbeatAt` DATETIME(3) NULL,
+  `firmwareBootCount` INT NULL,
+  `firmwareBootStartedAt` DATETIME(3) NULL,
   `heartbeatTimeoutSec` INT NOT NULL DEFAULT 60,
   `isRevoked` TINYINT(1) NOT NULL DEFAULT 0,
+  `mqttUsername` VARCHAR(80) NULL,
+  `mqttRoleName` VARCHAR(100) NULL,
+  `mqttProvisionedAt` DATETIME(3) NULL,
+  `mqttAccountEnabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `macAddress` VARCHAR(17) NULL,
+  `claimTokenHash` CHAR(64) NULL,
+  `claimTokenExpiresAt` DATETIME(3) NULL,
+  `claimConsumedAt` DATETIME(3) NULL,
+  `claimFailedAt` DATETIME(3) NULL,
+  `claimedAt` DATETIME(3) NULL,
   `revokedAt` DATETIME(3) NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `nodes_nodeCode_unique` (`nodeCode`),
+  UNIQUE KEY `nodes_mqttUsername_unique` (`mqttUsername`),
+  UNIQUE KEY `nodes_mqttRoleName_unique` (`mqttRoleName`),
+  UNIQUE KEY `nodes_macAddress_unique` (`macAddress`),
   KEY `idx_nodes_isOnline` (`isOnline`),
   KEY `idx_nodes_lastHeartbeatAt` (`lastHeartbeatAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -62,15 +77,22 @@ CREATE TABLE IF NOT EXISTS `diseases` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4. DEVICES --------------------------------------------------------------
--- Enum bám đúng backend: PUMP, SENSOR. Gateway ESP32 được ghi trong bảng nodes.
+-- Enum bám backend: PUMP, FAN, SENSOR. Gateway ESP32 được ghi trong bảng nodes.
 CREATE TABLE IF NOT EXISTS `devices` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `deviceCode` VARCHAR(50) NOT NULL,
   `name` VARCHAR(100) NOT NULL,
-  `type` ENUM('PUMP','SENSOR','CAMERA') NOT NULL,
+  `type` ENUM('PUMP','FAN','SENSOR','CAMERA') NOT NULL,
   `location` VARCHAR(150) NULL,
   `nodeId` INT NULL,
   `gpioPin` INT NULL,
+  `presenceVerifiedAt` DATETIME(3) NULL,
+  `readinessVerifiedAt` DATETIME(3) NULL,
+  `readinessType` ENUM('SENSOR_TELEMETRY','CURRENT_SENSOR','FLOW_SENSOR') NULL,
+  `lifecycleChangedAt` DATETIME(3) NULL,
+  `pendingLifecycleCommandUuid` CHAR(36) NULL,
+  `pendingLifecycleCommandTo` VARCHAR(30) NULL,
+  `pendingLifecycleCommandSentAt` DATETIME(3) NULL,
   `lifecycle` ENUM('REGISTERED','PROVISIONED','ACTIVE','FAULT','MAINTENANCE','DECOMMISSIONED') NOT NULL DEFAULT 'REGISTERED',
   `isOn` TINYINT(1) NOT NULL DEFAULT 0,
   `stateChangedAt` DATETIME(3) NULL,
@@ -80,6 +102,7 @@ CREATE TABLE IF NOT EXISTS `devices` (
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `devices_deviceCode_unique` (`deviceCode`),
+  UNIQUE KEY `devices_pendingLifecycleCommandUuid_unique` (`pendingLifecycleCommandUuid`),
   KEY `idx_devices_nodeId` (`nodeId`),
   KEY `idx_devices_lifecycle` (`lifecycle`),
   CONSTRAINT `fk_devices_node` FOREIGN KEY (`nodeId`) REFERENCES `nodes` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
@@ -102,11 +125,14 @@ CREATE TABLE IF NOT EXISTS `sensorReadings` (
   `metric` ENUM('SOIL_MOISTURE','AIR_TEMPERATURE','AIR_HUMIDITY') NOT NULL,
   `recordedAt` DATETIME(3) NOT NULL,
   `value` DECIMAL(8,2) NOT NULL,
+  `sourceBootCount` INT NULL,
+  `sourceSeq` BIGINT NULL,
   `isBackfilled` TINYINT(1) NOT NULL DEFAULT 0,
   `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`deviceId`,`metric`,`recordedAt`),
   KEY `idx_sensorReadings_recordedAt` (`recordedAt`),
   KEY `idx_sensorReadings_metric_time` (`metric`,`recordedAt`),
+  UNIQUE KEY `uq_sensorReadings_source_seq` (`deviceId`,`metric`,`sourceBootCount`,`sourceSeq`),
   CONSTRAINT `fk_sensorReadings_device` FOREIGN KEY (`deviceId`) REFERENCES `devices` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -244,15 +270,15 @@ INSERT INTO `diseases` (`id`,`modelLabel`,`nameVi`,`nameEn`,`isHealthy`) VALUES
 (4,'Pepper,_bell___Bacterial_spot','Bệnh đốm vi khuẩn trên ớt','Bacterial spot',0)
 ON DUPLICATE KEY UPDATE `nameVi`=VALUES(`nameVi`),`nameEn`=VALUES(`nameEn`),`isHealthy`=VALUES(`isHealthy`);
 
-INSERT INTO `devices` (`id`,`deviceCode`,`name`,`type`,`location`,`nodeId`,`gpioPin`,`lifecycle`,`isOn`,`stateChangedAt`,`config`,`configVersion`,`configAppliedVersion`,`createdAt`) VALUES
-(1,'DEV-001','Bơm chính A1','PUMP','Nhà kính A - Khu 1',1,26,'ACTIVE',1,DATE_SUB(NOW(3),INTERVAL 10 MINUTE),JSON_OBJECT('auto',JSON_OBJECT('enabled',TRUE,'sourceDeviceCode','DEV-004','metric','SOIL_MOISTURE','onOp','lt','onValue',40,'offOp','gt','offValue',70)),3,3,DATE_SUB(NOW(3),INTERVAL 40 DAY)),
-(2,'DEV-002','Bơm dự phòng A2','PUMP','Nhà kính A - Khu 1',1,27,'ACTIVE',0,DATE_SUB(NOW(3),INTERVAL 1 HOUR),JSON_OBJECT('auto',JSON_OBJECT('enabled',FALSE)),1,1,DATE_SUB(NOW(3),INTERVAL 38 DAY)),
-(3,'DEV-003','Bơm B1 - kiểm tra lỗi','PUMP','Nhà kính B - Khu 2',2,26,'FAULT',0,DATE_SUB(NOW(3),INTERVAL 20 MINUTE),JSON_OBJECT('auto',JSON_OBJECT('enabled',FALSE)),2,1,DATE_SUB(NOW(3),INTERVAL 30 DAY)),
-(4,'DEV-004','Cảm biến môi trường S1','SENSOR','Nhà kính A - Khu 1',1,NULL,'ACTIVE',0,NULL,JSON_OBJECT(),0,0,DATE_SUB(NOW(3),INTERVAL 35 DAY)),
-(5,'DEV-005','Cảm biến nhiệt độ T1','SENSOR','Phòng điều khiển',1,NULL,'ACTIVE',0,NULL,JSON_OBJECT(),0,0,DATE_SUB(NOW(3),INTERVAL 32 DAY)),
-(6,'DEV-006','Cảm biến độ ẩm không khí H1','SENSOR','Nhà kính A - Khu 1',1,NULL,'ACTIVE',0,NULL,JSON_OBJECT(),0,0,DATE_SUB(NOW(3),INTERVAL 28 DAY)),
-(7,'DEV-007','Cảm biến đất S2','SENSOR','Nhà kính B - Khu 2',2,NULL,'MAINTENANCE',0,NULL,JSON_OBJECT(),1,0,DATE_SUB(NOW(3),INTERVAL 25 DAY))
-ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`type`=VALUES(`type`),`location`=VALUES(`location`),`nodeId`=VALUES(`nodeId`),`gpioPin`=VALUES(`gpioPin`),`lifecycle`=VALUES(`lifecycle`),`isOn`=VALUES(`isOn`),`stateChangedAt`=VALUES(`stateChangedAt`),`config`=VALUES(`config`),`configVersion`=VALUES(`configVersion`),`configAppliedVersion`=VALUES(`configAppliedVersion`);
+INSERT INTO `devices` (`id`,`deviceCode`,`name`,`type`,`location`,`nodeId`,`gpioPin`,`lifecycle`,`isOn`,`stateChangedAt`,`lifecycleChangedAt`,`config`,`configVersion`,`configAppliedVersion`,`createdAt`) VALUES
+(1,'DEV-001','Bơm chính A1','PUMP','Nhà kính A - Khu 1',1,26,'ACTIVE',0,NULL,DATE_SUB(NOW(3),INTERVAL 40 DAY),JSON_OBJECT('localAutomation',TRUE,'auto',JSON_OBJECT('enabled',TRUE,'metric','SOIL_MOISTURE','onOp','lt','onValue',35,'offOp','gte','offValue',60)),3,3,DATE_SUB(NOW(3),INTERVAL 40 DAY)),
+(2,'DEV-002','Quạt thông gió A1','FAN','Nhà kính A - Khu 1',1,27,'ACTIVE',0,NULL,DATE_SUB(NOW(3),INTERVAL 1 DAY),JSON_OBJECT('localAutomation',TRUE,'fanThresholds',JSON_OBJECT('onTempC',32,'offTempC',30,'onHumidityPct',85,'offHumidityPct',80),'auto',JSON_OBJECT('enabled',TRUE,'preset','FAN_HYSTERESIS')),1,1,DATE_SUB(NOW(3),INTERVAL 1 DAY)),
+(3,'DEV-003','Bơm B1 - kiểm tra lỗi','PUMP','Nhà kính B - Khu 2',2,26,'FAULT',0,DATE_SUB(NOW(3),INTERVAL 20 MINUTE),DATE_SUB(NOW(3),INTERVAL 20 MINUTE),JSON_OBJECT('auto',JSON_OBJECT('enabled',FALSE)),2,1,DATE_SUB(NOW(3),INTERVAL 30 DAY)),
+(4,'DEV-004','Cảm biến độ ẩm đất S1','SENSOR','Nhà kính A - Khu 1',1,34,'ACTIVE',0,NULL,DATE_SUB(NOW(3),INTERVAL 35 DAY),JSON_OBJECT('metrics',JSON_ARRAY('SOIL_MOISTURE')),0,0,DATE_SUB(NOW(3),INTERVAL 35 DAY)),
+(5,'DEV-005','Cảm biến DHT11','SENSOR','Nhà kính A - Khu 1',1,4,'ACTIVE',0,NULL,DATE_SUB(NOW(3),INTERVAL 32 DAY),JSON_OBJECT('metrics',JSON_ARRAY('AIR_TEMPERATURE','AIR_HUMIDITY')),0,0,DATE_SUB(NOW(3),INTERVAL 32 DAY)),
+(6,'DEV-006','Cảm biến cũ H1 (đã ngừng dùng)','SENSOR','Nhà kính A - Khu 1',1,NULL,'DECOMMISSIONED',0,NULL,DATE_SUB(NOW(3),INTERVAL 1 DAY),JSON_OBJECT(),0,0,DATE_SUB(NOW(3),INTERVAL 28 DAY)),
+(7,'DEV-007','Cảm biến đất S2','SENSOR','Nhà kính B - Khu 2',2,NULL,'MAINTENANCE',0,NULL,DATE_SUB(NOW(3),INTERVAL 25 DAY),JSON_OBJECT(),1,0,DATE_SUB(NOW(3),INTERVAL 25 DAY))
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`type`=VALUES(`type`),`location`=VALUES(`location`),`nodeId`=VALUES(`nodeId`),`gpioPin`=VALUES(`gpioPin`),`lifecycle`=VALUES(`lifecycle`),`isOn`=VALUES(`isOn`),`stateChangedAt`=VALUES(`stateChangedAt`),`lifecycleChangedAt`=VALUES(`lifecycleChangedAt`),`config`=VALUES(`config`),`configVersion`=VALUES(`configVersion`),`configAppliedVersion`=VALUES(`configAppliedVersion`);
 
 INSERT INTO `userDevices` (`userId`,`deviceId`,`assignedAt`) VALUES
 (2,1,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,2,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,3,DATE_SUB(NOW(3),INTERVAL 30 DAY)),(2,4,DATE_SUB(NOW(3),INTERVAL 30 DAY)),

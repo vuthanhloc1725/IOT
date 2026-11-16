@@ -64,7 +64,7 @@ async function issueOne({ device, turnOn, source, userId = null, alertId = null,
     status: 'PENDING',
   });
 
-  if (!node || !node.isOnline || node.isRevoked) return finishFailed(cmd, 'Node offline, chưa gán node hoặc đã bị thu hồi');
+  if (!node || !node.isOnline || node.isRevoked || !node.mqttAccountEnabled) return finishFailed(cmd, 'Node offline, chưa có tài khoản MQTT đang bật hoặc đã bị thu hồi');
 
   cmd.status = 'SENT';
   cmd.sentAt = new Date();
@@ -72,12 +72,19 @@ async function issueOne({ device, turnOn, source, userId = null, alertId = null,
   socket.emitDevice(cmd.deviceId, 'command:update', cmd);
 
   try {
+    const action = device.type === 'FAN' ? 'fan' : 'pump';
+    // Firmware v1.2 command contract: action "pump"/"fan" with a boolean on/turnOn.
+    // commandUuid/deviceCode are extra correlation fields; firmware may echo them in cmd/ack.
     await mqtt.publish(mqtt.topics.command(node.nodeCode), {
       commandUuid: cmd.commandUuid,
+      commandId: cmd.commandUuid,
       deviceCode: device.deviceCode,
+      action,
       type: device.type,
       gpioPin: device.gpioPin,
+      on: turnOn,
       turnOn,
+      ...(device.type === 'PUMP' && turnOn ? { seconds: 10 } : {}),
     });
   } catch (error) {
     return finishFailed(cmd, error.message);
@@ -90,13 +97,13 @@ async function issueOne({ device, turnOn, source, userId = null, alertId = null,
 
 // Security rules for ACK:
 // - commandUuid must identify a command that is still SENT;
-// - deviceCode is mandatory and must match the command's device;
+// - legacy ACKs must include deviceCode; Firmware v1.2 may omit it only when the command UUID matches;
 // - the Node on the MQTT topic must own that device and not be revoked;
 // - success must be a JSON boolean; terminal/late/duplicate ACKs never change isOn.
 // Returns true only for a well-formed ACK accepted for the current command. A valid
 // success:false ACK is accepted (the Node is alive) but marks the command FAILED.
 exports.handleAck = async (node, payload) => {
-  const parsed = normalizeCommandAck(payload);
+  const parsed = normalizeCommandAck(payload, { firmwareCompat: true });
   if (!parsed.ok) return rejectAck(node, parsed.reason);
   const ack = parsed.ack;
 
@@ -164,10 +171,28 @@ exports.handleAck = async (node, payload) => {
   });
 
   if (ack.success) {
+    // An ACK may arrive after lifecycle changed to FAULT/MAINTENANCE/DECOMMISSIONED.
+    // Record the physical output result, then re-read lifecycle and issue a safety OFF if needed.
     device.isOn = cmd.turnOn;
     device.stateChangedAt = ackedAt;
     await device.save();
+    await device.reload();
     socket.emitDevice(device.id, 'device:update', device);
+    if (cmd.turnOn && device.lifecycle !== 'ACTIVE') {
+      try {
+        const stopCommand = await exports.issue({ device, turnOn: false, source: 'ALERT' });
+        await audit.log(null, {
+          action: 'device.safety_shutdown_after_late_on_ack', entityType: 'device', entityId: device.id,
+          success: !['FAILED', 'TIMEOUT'].includes(stopCommand.status),
+          detail: { deviceCode: device.deviceCode, lifecycle: device.lifecycle, originalCommandUuid: cmd.commandUuid, stopCommandUuid: stopCommand.commandUuid, stopStatus: stopCommand.status },
+        });
+      } catch (error) {
+        await audit.log(null, {
+          action: 'device.safety_shutdown_after_late_on_ack', entityType: 'device', entityId: device.id, success: false,
+          detail: { deviceCode: device.deviceCode, lifecycle: device.lifecycle, originalCommandUuid: cmd.commandUuid, reason: String(error.message || error).slice(0, 300) },
+        });
+      }
+    }
   }
   socket.emitDevice(cmd.deviceId, 'command:update', cmd);
   return true;

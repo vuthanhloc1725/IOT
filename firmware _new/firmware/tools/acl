@@ -1,0 +1,39 @@
+# ============================================================================
+#  ACL mẫu (v1.4) cho Mosquitto KHÔNG dùng Dynamic Security - để test một mình.
+#  Khớp ACL mà Backend (02/11/2026) tự tạo cho từng Node trên Dynamic Security:
+#   Node chỉ được ghi/đọc trong nhánh sf/<nodeCode>/...
+#  Khi chạy với Backend thật + Dynamic Security: KHÔNG cần file này, Backend tự cấp
+#  username/password + ACL cho mỗi Node (xem Backend/docs/mosquitto-acl.example).
+#
+#  %u = username dùng khi kết nối -> với file này đặt username MQTT = nodeCode (vd NODE-01)
+# ============================================================================
+
+# Backend: đọc toàn bộ dữ liệu node, gửi lệnh
+user backend
+topic readwrite sf/#
+topic readwrite iot/#
+
+# Tài khoản quản trị để test bằng mosquitto_pub/sub, MQTT Explorer, sim_backend.py
+user admin
+topic readwrite sf/#
+topic readwrite iot/#
+
+# Dịch vụ AI bên thứ ba: chỉ được gửi kết quả
+user ai-service
+topic write iot/ai/result
+
+# Node telemetry (áp dụng cho mọi user còn lại) - đúng danh sách topic Backend cho phép
+pattern write sf/%u/telemetry
+pattern write sf/%u/telemetry/backfill
+pattern write sf/%u/heartbeat
+pattern write sf/%u/status
+pattern write sf/%u/config
+pattern write sf/%u/cmd/ack
+pattern write sf/%u/command/ack
+pattern write sf/%u/config/ack
+pattern write sf/%u/device/probe/ack
+pattern read  sf/%u/cmd
+pattern read  sf/%u/config
+pattern read  sf/%u/device/probe
+
+# (09/11) Bỏ Node camera ESP32-CAM: ảnh lá chụp bằng camera điện thoại, không qua firmware.

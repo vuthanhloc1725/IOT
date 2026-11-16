@@ -13,38 +13,36 @@ function pickConsistentAlias(payload, camelName, snakeName) {
     return { ok: true, value };
 }
 
-exports.normalizeCommandAck = (payload) => {
+exports.normalizeCommandAck = (payload, { firmwareCompat = false } = {}) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         return { ok: false, reason: 'payload_not_object' };
     }
 
     const uuidField = pickConsistentAlias(payload, 'commandUuid', 'command_uuid');
     if (!uuidField.ok) return uuidField;
-    if (typeof uuidField.value !== 'string' || !UUID_RE.test(uuidField.value.trim())) {
+    const commandUuid = uuidField.value ?? (firmwareCompat ? payload.commandId ?? payload.command_id : undefined);
+    if (typeof commandUuid !== 'string' || !UUID_RE.test(commandUuid.trim())) {
         return { ok: false, reason: 'missing_or_invalid_command_uuid' };
     }
 
     const deviceField = pickConsistentAlias(payload, 'deviceCode', 'device_code');
     if (!deviceField.ok) return deviceField;
-    if (typeof deviceField.value !== 'string') {
-        return { ok: false, reason: 'missing_device_code' };
-    }
-    const deviceCode = deviceField.value.trim();
-    if (!deviceCode || deviceCode.length > 50 || /[\r\n/]/.test(deviceCode)) {
-        return { ok: false, reason: 'invalid_device_code' };
-    }
+    const deviceCodeValue = deviceField.value ?? (firmwareCompat ? payload.deviceCode ?? payload.device_code : undefined);
+    if (typeof deviceCodeValue !== 'string' && !firmwareCompat) return { ok: false, reason: 'missing_device_code' };
+    const deviceCode = typeof deviceCodeValue === 'string' ? deviceCodeValue.trim() : null;
+    if (deviceCode !== null && (!deviceCode || deviceCode.length > 50 || /[\r\n/]/.test(deviceCode))) return { ok: false, reason: 'invalid_device_code' };
 
-    if (typeof payload.success !== 'boolean') {
-        return { ok: false, reason: 'success_must_be_boolean' };
-    }
+    const successValue = payload.success !== undefined ? payload.success : (firmwareCompat ? payload.ok : undefined);
+    if (typeof successValue !== 'boolean') return { ok: false, reason: 'success_must_be_boolean' };
 
-    const message = typeof payload.message === 'string' ? payload.message.slice(0, 255) : null;
+    const messageValue = payload.message ?? payload.reason;
+    const message = typeof messageValue === 'string' ? messageValue.slice(0, 255) : null;
     return {
         ok: true,
         ack: {
-            commandUuid: uuidField.value.trim().toLowerCase(),
+            commandUuid: commandUuid.trim().toLowerCase(),
             deviceCode,
-            success: payload.success,
+            success: successValue,
             message,
         },
     };
@@ -64,7 +62,7 @@ exports.authorizeCommandAck = ({ cmd, device, node, ack, now = new Date(), timeo
     if (Number(device.nodeId) !== Number(node.id)) {
         return { ok: false, reason: 'wrong_node_for_device' };
     }
-    if (typeof device.deviceCode !== 'string' || ack.deviceCode !== device.deviceCode) {
+    if (ack.deviceCode !== null && (typeof device.deviceCode !== 'string' || ack.deviceCode !== device.deviceCode)) {
         return { ok: false, reason: 'device_code_mismatch' };
     }
 

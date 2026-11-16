@@ -27,11 +27,18 @@ async function main() {
     await syncDatabase();
 
     const server = http.createServer(app);
+    server.on('error', (error) => {
+        const message = error.code === 'EADDRINUSE'
+            ? `Cổng HTTP ${env.port} đang được sử dụng. Dừng phiên backend đang chạy rồi khởi động lại.`
+            : error.message;
+        console.error('[server] không khởi động được:', message);
+        process.exit(1);
+    });
     socketService.init(server);          // Socket.IO dùng chung cổng với Express
     mqttClient.start(async (nodeCode, kind, payload) => {
         if (kind === 'ai/result') return analysisService.handleMqttResult(payload);
         return ingest.handle(nodeCode, kind, payload);
-    }); // nhận telemetry/heartbeat/ack từ node và kết quả AI có ảnh
+    }, async () => nodeService.retryPendingConfigurations({ force: true })); // retry cấu hình chưa ACK sau connect/reconnect
 
     // Quét heartbeat + lệnh quá hạn ACK. Bọc try/catch để một lần lỗi không làm dừng vòng quét.
     let sweeping = false;
