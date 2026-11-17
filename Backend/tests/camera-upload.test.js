@@ -9,12 +9,13 @@ const assert = require('node:assert/strict');
 
 // ---- Mock models trước khi require app ----
 const CAM = 'CAM-001';
-const mockDb = { tokens: [], media: [], analyses: [] };
+const mockDb = { tokens: [], media: [], analyses: [], lifecycle: 'ACTIVE' };
 
 function resetMockDb() {
     mockDb.tokens.length = 0;
     mockDb.media.length = 0;
     mockDb.analyses.length = 0;
+    mockDb.lifecycle = 'ACTIVE';
 }
 
 // Tạo 1 camera token test (deviceId = 1 → Device CAM-001)
@@ -29,7 +30,8 @@ const CameraTokenMock = {
     findOne: async ({ where }) => mockDb.tokens.find((t) => t.tokenHash === where.tokenHash) || null,
 };
 const DeviceMock = {
-    findByPk: async (id) => (id === 1 ? { id: 1, deviceCode: CAM, type: 'CAMERA', lifecycle: 'REGISTERED' } : null),
+    findByPk: async (id) => (id === 1 ? { id: 1, deviceCode: CAM, type: 'CAMERA', lifecycle: mockDb.lifecycle, config: {} } : null),
+    update: async () => [0],
 };
 const LeafAnalysisMock = {
     findOne: async ({ where }) => mockDb.analyses.find((a) => a.eventId === where.eventId) || null,
@@ -52,6 +54,7 @@ models.CameraToken = CameraTokenMock;
 models.Device = DeviceMock;
 models.LeafAnalysis = LeafAnalysisMock;
 models.CameraMedia = CameraMediaMock;
+models.Alert = { findAll: async () => [], findOne: async () => null };
 
 // Mock storage
 const storagePath = require.resolve('../src/services/camera-media.storage');
@@ -234,5 +237,39 @@ describe('Camera upload endpoint', () => {
         mockDb.media.push({ eventId: 'ev-other', cameraId: 'CAM-999', sha256: 'b'.repeat(64) });
         const res = await upload({ eventId: 'ev-other', cameraId: CAM }, crypto.randomBytes(32));
         assert.equal(res.status, 409);
+    });
+
+    it('blocks uploads with 403 CAMERA_NOT_ACCEPTING while in MAINTENANCE', async () => {
+        mockDb.lifecycle = 'MAINTENANCE';
+        const res = await upload({ eventId: 'ev-maint', cameraId: CAM }, crypto.randomBytes(32));
+        assert.equal(res.status, 403);
+        assert.equal(res.body.error.code, 'CAMERA_NOT_ACCEPTING');
+        assert.equal(mockDb.media.length, 0);
+    });
+
+    it('heartbeat updates lastUsedAt and reports lifecycle', async () => {
+        const res = await request(server, {
+            method: 'POST', path: '/api/camera/heartbeat',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: Buffer.from('{}'),
+        });
+        assert.equal(res.status, 200);
+        assert.equal(res.body.status, 'ok');
+        assert.equal(res.body.cameraId, CAM);
+        assert.equal(res.body.acceptingUploads, true);
+        assert.equal(res.body.heartbeatIntervalSeconds, 60);
+        assert.ok(mockDb.tokens[0].lastUsedAt instanceof Date);
+    });
+
+    it('heartbeat still accepted in MAINTENANCE but reports acceptingUploads=false', async () => {
+        mockDb.lifecycle = 'MAINTENANCE';
+        const res = await request(server, { method: 'POST', path: '/api/camera/heartbeat', headers: { Authorization: `Bearer ${token}` } });
+        assert.equal(res.status, 200);
+        assert.equal(res.body.acceptingUploads, false);
+    });
+
+    it('heartbeat rejects missing token', async () => {
+        const res = await request(server, { method: 'POST', path: '/api/camera/heartbeat', headers: {} });
+        assert.equal(res.status, 401);
     });
 });

@@ -46,6 +46,8 @@ module.exports = (sequelize, DataTypes) =>
                     }
                 },
                 nodeRequiredAfterRegistered() {
+                    // Camera (điện thoại) không gắn Node ESP32: credential là camera token.
+                    if (this.type === 'CAMERA') return;
                     if (!['REGISTERED', 'DECOMMISSIONED'].includes(this.lifecycle) && !this.nodeId) {
                         throw new Error('Thiết bị từ PROVISIONED trở đi phải gắn vào một node');
                     }

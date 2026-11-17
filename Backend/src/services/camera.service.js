@@ -3,6 +3,7 @@
  * Token Camera do camera.controller quản lý (bảng cameraTokens, theo deviceId).
  */
 const crypto = require('node:crypto');
+const { Op } = require('sequelize');
 const { CameraMedia } = require('../models');
 const storage = require('./camera-media.storage');
 const ApiError = require('../utils/apiError');
@@ -87,15 +88,28 @@ exports.receiveMedia = async (metadata, fileBuffer, fileMime, authedCameraId) =>
 
 // ---- Xem media (admin/user gọi) ----
 
-exports.getMediaFile = async (eventId) => {
+/**
+ * allowedCodes: null = Admin (xem tất cả); mảng deviceCode = chỉ các Camera người dùng được gán.
+ * Media của Camera không được phép trả 404 (không lộ eventId tồn tại).
+ */
+function allowed(record, allowedCodes) {
+    return allowedCodes === null || allowedCodes === undefined || allowedCodes.includes(record.cameraId);
+}
+
+exports.getMediaFile = async (eventId, allowedCodes = null) => {
     const record = await CameraMedia.findOne({ where: { eventId } });
-    if (!record) throw ApiError.notFound(`Media ${eventId} không tồn tại`);
+    if (!record || !allowed(record, allowedCodes)) throw ApiError.notFound(`Media ${eventId} không tồn tại`);
     return storage.read(record.filename);
 };
 
-exports.listMedia = async ({ cameraId, limit = 50, offset = 0 } = {}) => {
+exports.listMedia = async ({ cameraId, limit = 50, offset = 0, allowedCodes = null } = {}) => {
     const where = {};
-    if (cameraId) where.cameraId = cameraId;
+    if (allowedCodes !== null && allowedCodes !== undefined) {
+        if (cameraId && !allowedCodes.includes(cameraId)) return { count: 0, rows: [] };
+        where.cameraId = cameraId || { [Op.in]: allowedCodes };
+    } else if (cameraId) {
+        where.cameraId = cameraId;
+    }
     return CameraMedia.findAndCountAll({
         where,
         order: [['capturedAt', 'DESC'], ['receivedAt', 'DESC']],

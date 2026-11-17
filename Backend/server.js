@@ -22,7 +22,7 @@ async function syncDatabase() {
 
 async function main() {
     await sequelize.authenticate();
-    console.log(`[db] đã kết nối ${env.db.dialect}`);
+    console.log(`[db] đã kết nối MySQL (${env.db.name})`);
     await syncDatabase();
 
     const server = http.createServer(app);
@@ -47,6 +47,11 @@ async function main() {
             await nodeService.sweep();
         } catch (e) {
             console.error('[sweep] lỗi:', e.message);
+        }
+        try {
+            await require('./src/services/camera-lifecycle.service').sweepOffline(); // Camera điện thoại quá hạn heartbeat
+        } catch (e) {
+            console.error('[sweep camera] lỗi:', e.message);
         } finally {
             sweeping = false;
         }

@@ -43,6 +43,21 @@ export async function request(path, { method = 'GET', params, body } = {}) {
   return json;
 }
 
+export async function postForm(path, formData) {
+  const token = getToken();
+  const response = await fetch(makeUrl(path), {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    await handleUnauthorized(response.status);
+    throw new ApiError(response.status, json?.message || json?.error?.message || response.statusText || 'API error', json);
+  }
+  return json;
+}
+
 export async function getBlob(path) {
   const response = await fetch(makeUrl(path), { headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} });
   if (!response.ok) {

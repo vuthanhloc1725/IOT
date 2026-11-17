@@ -7,6 +7,7 @@ import Users from './pages/Users';
 import Nodes from './pages/Nodes';
 import Alerts from './pages/Alerts';
 import AIAnalyses from './pages/AIAnalyses';
+import Cameras from './pages/Cameras';
 import Audit from './pages/Audit';
 import Login from './pages/Login';
 import './styles/admin.css';
@@ -28,7 +29,8 @@ function AppRoutes() {
       <Route path="nodes" element={<RequireAuth roles={['admin']}><Nodes/></RequireAuth>}/>
       <Route path="users" element={<RequireAuth roles={['admin']}><Users/></RequireAuth>}/>
       <Route path="alerts" element={<Alerts/>}/>
-      <Route path="ai" element={<AIAnalyses/>}/>
+      <Route path="cameras" element={<Cameras/>}/>
+        <Route path="ai" element={<AIAnalyses/>}/>
       <Route path="audit" element={<RequireAuth roles={['admin']}><Audit/></RequireAuth>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>
     </Route>

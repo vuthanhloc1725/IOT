@@ -5,19 +5,36 @@ const ctrl = wrap(require('../controllers/camera.controller'));
 const { authenticate } = require('../middlewares/auth');
 const { requireRole } = require('../middlewares/rbac');
 const cameraAuth = require('../middlewares/camera-auth');
-const parseCameraUpload = require('../middlewares/camera-upload');
+const parseCameraUpload = require('../middlewares/image-upload');
+
+const cameraLifecycle = require('../services/camera-lifecycle.service');
+
+// Upload chỉ nhận khi Camera PROVISIONED/ACTIVE; kiểm tra trước khi đọc file để không tốn băng thông.
+const acceptingUploads = (req, _res, next) => {
+    try { cameraLifecycle.assertCanUpload(req.camera); next(); } catch (err) { next(err); }
+};
+
+// ---- Danh sách Camera: Admin thấy tất cả, người dùng chỉ thấy Camera được gán ----
+router.get('/', authenticate, ctrl.listCameras);
 
 // ---- Admin: đăng ký Camera và cấp/thu hồi credential riêng ----
-router.get('/', authenticate, requireRole('admin'), ctrl.listCameras);
 router.post('/', authenticate, requireRole('admin'), ctrl.register);
+router.get('/server-hints', authenticate, requireRole('admin'), ctrl.serverHints);
 router.post('/tokens/:cameraId', authenticate, requireRole('admin'), ctrl.issueToken);
 router.delete('/tokens/:cameraId', authenticate, requireRole('admin'), ctrl.revokeToken);
 
-// ---- Camera/Agent gửi ảnh trực tiếp (Bearer camera token, không cần JWT người dùng) ----
+// ---- Camera/Agent: heartbeat + gửi ảnh trực tiếp (Bearer camera token, không cần JWT người dùng) ----
+router.post(
+    '/heartbeat',
+    rateLimit({ windowMs: 60_000, limit: 30, message: { error: { status: 429, message: 'Heartbeat quá dày, thử lại sau' } } }),
+    cameraAuth,
+    ctrl.heartbeat,
+);
 router.post(
     '/media',
     rateLimit({ windowMs: 60_000, limit: 30, message: { error: { status: 429, message: 'Upload quá nhiều, thử lại sau' } } }),
     cameraAuth,
+    acceptingUploads,
     parseCameraUpload,
     ctrl.receiveMedia,
 );

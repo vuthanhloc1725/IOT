@@ -194,13 +194,14 @@ CREATE TABLE IF NOT EXISTS `leafAnalyses` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `eventId` VARCHAR(100) NULL,
   `deviceId` INT NULL,
+  `uploadedBy` INT NULL,
   `capturedAt` DATETIME(3) NOT NULL,
   `diseaseId` INT NOT NULL,
   `confidence` DECIMAL(5,4) NOT NULL,
   `boundingBoxes` JSON NULL,
   `predictions` JSON NULL,
   `aiResult` JSON NULL,
-  `imagePath` VARCHAR(500) NULL COMMENT 'Legacy local image path; new images use Cloudinary',
+  `imagePath` VARCHAR(500) NULL COMMENT 'Private local image filename managed by Backend',
   `imageUrl` VARCHAR(1000) NULL,
   `cloudinaryPublicId` VARCHAR(255) NULL,
   `imageSha256` CHAR(64) NULL,
@@ -210,9 +211,11 @@ CREATE TABLE IF NOT EXISTS `leafAnalyses` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `leafAnalyses_eventId_unique` (`eventId`),
   KEY `idx_leafAnalyses_deviceId` (`deviceId`),
+  KEY `idx_leafAnalyses_uploadedBy` (`uploadedBy`),
   KEY `idx_leafAnalyses_diseaseId` (`diseaseId`),
   KEY `idx_leafAnalyses_capturedAt` (`capturedAt`),
   CONSTRAINT `fk_leafAnalyses_device` FOREIGN KEY (`deviceId`) REFERENCES `devices` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_leafAnalyses_uploadedBy` FOREIGN KEY (`uploadedBy`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_leafAnalyses_disease` FOREIGN KEY (`diseaseId`) REFERENCES `diseases` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -308,7 +311,10 @@ INSERT INTO `diseases` (`id`,`modelLabel`,`nameVi`,`nameEn`,`isHealthy`) VALUES
 (1,'Tomato___Late_blight','Bệnh mốc sương','Tomato late blight',0),
 (2,'Tomato___Early_blight','Bệnh đốm vòng','Tomato early blight',0),
 (3,'Tomato___healthy','Lá cà chua khỏe mạnh','Healthy tomato leaf',1),
-(4,'Pepper,_bell___Bacterial_spot','Bệnh đốm vi khuẩn trên ớt','Bacterial spot',0)
+(4,'Pepper,_bell___Bacterial_spot','Bệnh đốm vi khuẩn trên ớt','Bacterial spot',0),
+(5,'anthracnose_leaf_spot','Bệnh thán thư','Anthracnose leaf spot',0),
+(6,'healthy','Lá khỏe mạnh','Healthy leaf',1),
+(7,'straw_mite','Nhện hại lá','Straw mite damage',0)
 ON DUPLICATE KEY UPDATE `nameVi`=VALUES(`nameVi`),`nameEn`=VALUES(`nameEn`),`isHealthy`=VALUES(`isHealthy`);
 
 INSERT INTO `devices` (`id`,`deviceCode`,`name`,`type`,`location`,`nodeId`,`gpioPin`,`lifecycle`,`isOn`,`stateChangedAt`,`lifecycleChangedAt`,`config`,`configVersion`,`configAppliedVersion`,`createdAt`) VALUES

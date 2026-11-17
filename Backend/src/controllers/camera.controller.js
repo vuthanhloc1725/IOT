@@ -10,6 +10,8 @@
  * Response luôn có `status` = "stored" | "duplicate" và `sha256` để agent trên điện thoại xử lý idempotent.
  */
 const crypto = require('node:crypto');
+const os = require('node:os');
+const { Op, fn, col } = require('sequelize');
 const { CameraToken, Device, LeafAnalysis, CameraMedia } = require('../models');
 const ApiError = require('../utils/apiError');
 const env = require('../config/env');
@@ -17,8 +19,21 @@ const audit = require('../services/audit.service');
 const analysisService = require('../services/analysis.service');
 const cameraService = require('../services/camera.service');
 const { createWithSequentialCode } = require('../services/code-generator');
+const cameraLifecycle = require('../services/camera-lifecycle.service');
 
 const AI_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+// Địa chỉ server mà điện thoại truy cập được. Admin có thể gửi serverUrl (ví dụ http://192.168.1.10:3000)
+// vì khi mở web qua localhost/proxy, host của request không dùng được trên điện thoại.
+function resolveServerUrl(req) {
+    const raw = req.body?.serverUrl ? String(req.body.serverUrl).trim() : `${req.protocol}://${req.get('host')}`;
+    let parsed;
+    try { parsed = new URL(raw); } catch { throw ApiError.badRequest('serverUrl không hợp lệ'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+        throw ApiError.badRequest('serverUrl phải là http(s)://host[:port]');
+    }
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '').replace(/\/api$/, '')}`;
+}
 
 const aiPipelineEnabled = () => Boolean(
     env.ai.apiUrl && env.ai.apiKey
@@ -26,6 +41,22 @@ const aiPipelineEnabled = () => Boolean(
 );
 
 // ---- Admin: đăng ký Camera (Device type CAMERA, mã CAM-001, CAM-002…) ----
+
+// Bỏ card ảo (docker, bridge VM…) vì điện thoại không tới được; giữ Wi-Fi/Ethernet/Tailscale.
+const VIRTUAL_IFACE = /^(lo|docker|br-|veth|virbr|vmnet|vboxnet|cni|flannel|podman)/i;
+
+// Gợi ý địa chỉ server cho form Cấp token: IPv4 thật của máy chạy Backend + cổng Backend.
+// Trình duyệt không tự biết IP LAN, còn host của request thường là localhost:5173 (Vite).
+exports.serverHints = async (_req, res) => {
+    const urls = [];
+    for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+        if (VIRTUAL_IFACE.test(name)) continue;
+        for (const a of addrs || []) {
+            if (a.family === 'IPv4' && !a.internal) urls.push({ url: `http://${a.address}:${env.port}`, iface: name });
+        }
+    }
+    res.json({ data: { port: env.port, urls } });
+};
 
 exports.register = async (req, res) => {
     const name = String(req.body?.name || '').trim();
@@ -35,11 +66,15 @@ exports.register = async (req, res) => {
     if (!Number.isInteger(interval) || interval < 5 || interval > 86400) {
         throw ApiError.badRequest('captureIntervalSeconds phải từ 5 đến 86400 giây');
     }
+    const heartbeat = req.body?.heartbeatIntervalSeconds === undefined ? 60 : Number(req.body.heartbeatIntervalSeconds);
+    if (!Number.isInteger(heartbeat) || heartbeat < 10 || heartbeat > 3600) {
+        throw ApiError.badRequest('heartbeatIntervalSeconds phải từ 10 đến 3600 giây');
+    }
     const created = await createWithSequentialCode({
         prefix: 'CAM', Model: Device, field: 'deviceCode',
         values: {
             name, type: 'CAMERA', location, nodeId: null, gpioPin: null,
-            lifecycle: 'REGISTERED', isOn: false, config: { captureIntervalSeconds: interval },
+            lifecycle: 'REGISTERED', isOn: false, config: { captureIntervalSeconds: interval, heartbeatIntervalSeconds: heartbeat },
             configVersion: 0, configAppliedVersion: 0,
         },
     });
@@ -47,18 +82,56 @@ exports.register = async (req, res) => {
         action: 'camera.created', entityType: 'device', entityId: created.record.id,
         detail: { cameraId: created.record.deviceCode, location },
     });
-    res.status(201).json({ data: created.record, meta: { cameraIdGenerated: true } });
+    res.status(201).json({ data: cameraLifecycle.toView(created.record, null), meta: { cameraIdGenerated: true } });
 };
 
-// ---- Admin: danh sách Camera + trạng thái token ----
+// ---- Danh sách Camera + online/offline. Admin thấy tất cả, người dùng chỉ thấy Camera được gán ----
 
-exports.listCameras = async (_req, res) => {
+const TOKEN_ATTRS = ['expiresAt', 'revokedAt', 'createdAt', 'lastUsedAt'];
+
+async function cameraLastMedia(cameras) {
+    const ids = cameras.map((c) => c.id);
+    const codes = cameras.map((c) => c.deviceCode);
+    if (!ids.length) return new Map();
+    const [analyses, media] = await Promise.all([
+        LeafAnalysis.findAll({
+            where: { deviceId: { [Op.in]: ids } },
+            attributes: ['deviceId', [fn('MAX', col('receivedAt')), 'lastAt'], [fn('COUNT', col('id')), 'total']],
+            group: ['deviceId'], raw: true,
+        }),
+        CameraMedia.findAll({
+            where: { cameraId: { [Op.in]: codes } },
+            attributes: ['cameraId', [fn('MAX', col('receivedAt')), 'lastAt'], [fn('COUNT', col('eventId')), 'total']],
+            group: ['cameraId'], raw: true,
+        }),
+    ]);
+    const out = new Map(cameras.map((c) => [c.id, { lastMediaAt: null, mediaCount: 0, analysisCount: 0 }]));
+    const byCode = new Map(cameras.map((c) => [c.deviceCode, c.id]));
+    const bump = (id, lastAt, total, key) => {
+        const row = out.get(id);
+        if (!row) return;
+        row[key] += Number(total) || 0;
+        if (lastAt && (!row.lastMediaAt || new Date(lastAt) > new Date(row.lastMediaAt))) row.lastMediaAt = new Date(lastAt);
+    };
+    for (const a of analyses) bump(Number(a.deviceId), a.lastAt, a.total, 'analysisCount');
+    for (const m of media) bump(byCode.get(m.cameraId), m.lastAt, m.total, 'mediaCount');
+    return out;
+}
+
+exports.listCameras = async (req, res) => {
+    const where = { type: 'CAMERA' };
+    const codes = await cameraLifecycle.accessibleCameraCodes(req.user);
+    if (codes !== null) where.deviceCode = { [Op.in]: codes };
     const cameras = await Device.findAll({
-        where: { type: 'CAMERA' },
-        include: [{ model: CameraToken, as: 'cameraToken', attributes: ['expiresAt', 'revokedAt', 'createdAt', 'lastUsedAt'] }],
+        where,
+        include: [{ model: CameraToken, as: 'cameraToken', attributes: TOKEN_ATTRS }],
         order: [['deviceCode', 'ASC']],
     });
-    res.json({ data: cameras, meta: { storage: aiPipelineEnabled() ? 'ai-cloudinary' : 'local-disk' } });
+    const stats = await cameraLastMedia(cameras);
+    res.json({
+        data: cameras.map((c) => cameraLifecycle.toView(c, c.cameraToken, stats.get(c.id))),
+        meta: { storage: aiPipelineEnabled() ? 'ai-cloudinary' : 'local-disk' },
+    });
 };
 
 // ---- Admin: cấp / cấp lại token (token cũ mất hiệu lực ngay) ----
@@ -68,6 +141,8 @@ exports.issueToken = async (req, res) => {
     if (!cameraCode || cameraCode.length > 50) throw ApiError.badRequest('cameraId không hợp lệ');
     const camera = await Device.findOne({ where: { deviceCode: cameraCode, type: 'CAMERA' } });
     if (!camera) throw ApiError.notFound('Không tìm thấy Camera theo deviceCode');
+    if (camera.lifecycle === 'DECOMMISSIONED') throw ApiError.conflict('Camera đã ngừng hoạt động (DECOMMISSIONED), không thể cấp token');
+    const serverUrl = resolveServerUrl(req);
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     let expiresAt = null;
@@ -90,13 +165,27 @@ exports.issueToken = async (req, res) => {
         entityId: camera.id,
         detail: { cameraId: camera.deviceCode, expiresAt },
     });
+    await cameraLifecycle.onTokenIssued(camera);
+    const heartbeatIntervalSeconds = cameraLifecycle.heartbeatIntervalSec(camera);
+    const uploadUrl = `${serverUrl}/api/camera/media`;
+    const heartbeatUrl = `${serverUrl}/api/camera/heartbeat`;
     // Token thô chỉ xuất hiện trong response lần cấp này.
     res.status(201).json({
         data: {
             cameraId: camera.deviceCode,
             token,
             expiresAt,
-            uploadUrl: `${req.protocol}://${req.get('host')}/api/camera/media`,
+            lifecycle: camera.lifecycle,
+            uploadUrl,
+            heartbeatUrl,
+            heartbeatIntervalSeconds,
+            // Đoạn cấu hình dán thẳng vào phone-camera/config.json (hoặc quét QR).
+            agentConfig: {
+                camera_id: camera.deviceCode,
+                heartbeat_interval_seconds: heartbeatIntervalSeconds,
+                upload: { url: uploadUrl, heartbeat_url: heartbeatUrl, token, allow_insecure_http: serverUrl.startsWith('http://') },
+                capture: { interval_seconds: Number(camera.config?.captureIntervalSeconds) || 900 },
+            },
         },
         warning: 'Hãy lưu token ngay. Server không thể hiển thị lại token này.',
     });
@@ -106,8 +195,24 @@ exports.revokeToken = async (req, res) => {
     const camera = await Device.findOne({ where: { deviceCode: req.params.cameraId, type: 'CAMERA' } });
     if (!camera) throw ApiError.notFound('Không tìm thấy Camera');
     await CameraToken.update({ revokedAt: new Date() }, { where: { deviceId: camera.id } });
+    await cameraLifecycle.onTokenRevoked(camera);
     await audit.log(req, { action: 'camera.token_revoked', entityType: 'device', entityId: camera.id });
-    res.json({ message: 'Đã thu hồi token Camera' });
+    res.json({ message: 'Đã thu hồi token Camera', data: { cameraId: camera.deviceCode, lifecycle: camera.lifecycle } });
+};
+
+// ---- Camera/Agent: heartbeat (Bearer camera token) ----
+// camera-auth đã cập nhật lastUsedAt + tự ACTIVE ở lần đầu. Trả cấu hình để agent tự đồng bộ.
+exports.heartbeat = async (req, res) => {
+    const camera = req.camera;
+    res.json({
+        status: 'ok',
+        cameraId: camera.deviceCode,
+        lifecycle: camera.lifecycle,
+        acceptingUploads: ['PROVISIONED', 'ACTIVE'].includes(camera.lifecycle),
+        heartbeatIntervalSeconds: cameraLifecycle.heartbeatIntervalSec(camera),
+        captureIntervalSeconds: Number(camera.config?.captureIntervalSeconds) || null,
+        serverTime: new Date().toISOString(),
+    });
 };
 
 // ---- Upload: phone/agent gọi POST /api/camera/media ----
@@ -187,7 +292,8 @@ exports.receiveMedia = async (req, res) => {
 // ---- Xem media lưu đĩa (fallback) ----
 
 exports.getFile = async (req, res) => {
-    const { buffer, mimeType } = await cameraService.getMediaFile(req.params.eventId);
+    const allowedCodes = await cameraLifecycle.accessibleCameraCodes(req.user);
+    const { buffer, mimeType } = await cameraService.getMediaFile(req.params.eventId, allowedCodes);
     res.set({
         'Content-Type': mimeType,
         'Content-Length': String(buffer.length),
@@ -200,7 +306,9 @@ exports.getFile = async (req, res) => {
 exports.list = async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
-    const { count, rows } = await cameraService.listMedia({ cameraId: req.query.cameraId, limit, offset });
+    const allowedCodes = await cameraLifecycle.accessibleCameraCodes(req.user);
+    const cameraId = req.query.cameraId ? String(req.query.cameraId).trim() : undefined;
+    const { count, rows } = await cameraService.listMedia({ cameraId, limit, offset, allowedCodes });
     res.json({
         data: rows.map((r) => ({ ...r.toJSON(), fileUrl: `/api/camera/media/${encodeURIComponent(r.eventId)}/file` })),
         meta: { total: count, limit, offset },

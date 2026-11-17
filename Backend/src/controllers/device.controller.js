@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Device, Node, DeviceCommand, User, UserDevice, Alert } = require('../models');
+const { Device, Node, DeviceCommand, User, UserDevice, Alert, CameraToken } = require('../models');
 const { DEVICE_TYPES, ACTUATOR_TYPES, AUTO_ACTUATORS, METRICS, LIFECYCLE, LIFECYCLE_TRANSITIONS } = require('../constants');
 const ApiError = require('../utils/apiError');
 const { pick } = require('../utils/helpers');
@@ -15,6 +15,7 @@ const { accessibleDeviceIds, scopeWhere, getDeviceForUser } = require('../servic
 const { recoveryBlockReason } = require('../services/device-lifecycle.policy');
 const { DEFAULT_SENSOR_THRESHOLD_RULES, normalizeRule: normalizeThresholdRule } = require('../services/sensor-threshold.policy');
 const { createWithSequentialCode } = require('../services/code-generator');
+const cameraLifecycle = require('../services/camera-lifecycle.service');
 
 const nodeInclude = { model: Node, as: 'node', attributes: ['id', 'name', 'isOnline', 'lastHeartbeatAt', 'isRevoked'] };
 const OPS = ['lt', 'lte', 'gt', 'gte'];
@@ -405,6 +406,10 @@ exports.changeLifecycle = async (req, res) => {
     const to = req.body?.to;
     const from = device.lifecycle;
     if (!LIFECYCLE.includes(to)) throw ApiError.badRequest(`to phải thuộc: ${LIFECYCLE.join(', ')}`);
+    // Camera điện thoại không có Node/MQTT ACK → dùng bảng chuyển trạng thái riêng.
+    if (device.type === 'CAMERA') {
+        return res.json({ data: cameraLifecycle.toView(await cameraLifecycle.changeLifecycle(req, device, to), await CameraToken.findOne({ where: { deviceId: device.id } })) });
+    }
     const allowed = LIFECYCLE_TRANSITIONS[device.lifecycle] || [];
     if (!allowed.includes(to)) {
         throw ApiError.conflict(`Không thể chuyển ${device.lifecycle} → ${to}. Cho phép: ${allowed.join(', ') || '(không có)'}`);

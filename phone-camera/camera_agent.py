@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Termux smartphone camera node: captures with Termux:API, uploads media over HTTPS.
 
-MQTT is optional and only used for on-demand commands, status and heartbeats.
-Media bytes never travel over MQTT.
+Online status: an HTTPS heartbeat (POST /api/camera/heartbeat, same Bearer token) every
+heartbeat_interval_seconds. The server marks the camera online/offline from it and replies with
+its lifecycle; while the camera is in FAULT/MAINTENANCE uploads pause and media stays queued.
+
+MQTT is optional and only used for on-demand commands and status. Media bytes never travel over MQTT.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - depends on the device
     mqtt = None  # type: ignore[assignment]
 
 
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.3.0"
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("phone-camera")
 STOP = threading.Event()
@@ -43,6 +46,15 @@ STORED, REJECTED, RETRY = "stored", "rejected", "retry"
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def heartbeat_url(upload_cfg: dict[str, Any]) -> str:
+    """upload.heartbeat_url, or derived from upload.url (.../api/camera/media -> .../api/camera/heartbeat)."""
+    explicit = str(upload_cfg.get("heartbeat_url") or "").strip()
+    if explicit:
+        return explicit
+    url = str(upload_cfg.get("url", "")).rstrip("/")
+    return (url[: -len("/media")] if url.endswith("/media") else url) + "/heartbeat"
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -65,6 +77,12 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("upload.url uses http://; use https:// or set upload.allow_insecure_http=true for LAN tests only")
     if not str(upload.get("token", "")).strip() or "REPLACE" in str(upload.get("token")):
         raise ValueError("upload.token is not set")
+    hb_url = heartbeat_url(upload)
+    hb = urllib.parse.urlparse(hb_url)
+    if hb.scheme not in ("https", "http") or not hb.netloc:
+        raise ValueError("upload.heartbeat_url must be an absolute URL")
+    if hb.scheme == "http" and not upload.get("allow_insecure_http", False):
+        raise ValueError("upload.heartbeat_url uses http://; set upload.allow_insecure_http=true for LAN tests only")
     ca_file = upload.get("ca_file")
     if ca_file and not Path(ca_file).expanduser().is_file():
         raise ValueError(f"upload.ca_file not found: {ca_file}")
@@ -108,7 +126,8 @@ def classify_response(status: int, body: bytes, retry_after: str | None, expecte
             payload = {}
     except (UnicodeDecodeError, json.JSONDecodeError):
         payload = {}
-    reason = str(payload.get("reason") or payload.get("message") or "")[:160]
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    reason = str(payload.get("reason") or payload.get("message") or error.get("code") or error.get("message") or "")[:160]
 
     if 200 <= status < 300:
         server_status = str(payload.get("status", "stored"))
@@ -227,6 +246,37 @@ class HttpsUploader:
         ca_file = cfg.get("ca_file") or None
         context = ssl.create_default_context(cafile=str(Path(ca_file).expanduser()) if ca_file else None)
         self.opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=context))
+        self.heartbeat_url = heartbeat_url(cfg)
+
+    def heartbeat(self, status: dict[str, Any]) -> tuple[int, dict[str, Any] | None, str]:
+        """POST a JSON heartbeat. Returns (http_status or 0 for network error, server JSON, detail)."""
+        body = json.dumps({"cameraId": self.camera_id, "at": utc_now(), "agentVersion": AGENT_VERSION, **status},
+                          separators=(",", ":")).encode("utf-8")
+        request = urllib.request.Request(self.heartbeat_url, data=body, method="POST", headers={
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": f"phone-camera-agent/{AGENT_VERSION}",
+            "X-Camera-Id": self.camera_id,
+        })
+        try:
+            with self.opener.open(request, timeout=min(self.timeout, 20)) as response:
+                raw = response.read(MAX_RESPONSE_BYTES)
+                code = response.status
+        except urllib.error.HTTPError as exc:
+            raw, code = exc.read(MAX_RESPONSE_BYTES), exc.code
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            return 0, None, f"network_error:{getattr(exc, 'reason', exc)}"[:200]
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if 200 <= code < 300:
+            return code, payload, "ok"
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        return code, payload, f"http_{code}:{error.get('code') or error.get('message') or ''}".rstrip(":")[:200]
 
     def upload(self, row: sqlite3.Row | dict[str, Any]) -> tuple[str, str, float]:
         path = Path(row["path"])
@@ -290,6 +340,12 @@ class CameraAgent:
         self.last_heartbeat = 0.0
         self.last_capture = 0.0
         self.last_upload_error: str | None = None
+        # HTTPS heartbeat: server lifecycle decides whether uploads are accepted.
+        self.http_heartbeat = bool(upload_cfg.get("http_heartbeat", True))
+        self.heartbeat_interval = max(10, int(config.get("heartbeat_interval_seconds", 30)))
+        self.accepting_uploads = threading.Event()
+        self.accepting_uploads.set()
+        self.server_lifecycle: str | None = None
 
         mqtt_cfg = config.get("mqtt") or {}
         self.mqtt_enabled = bool(mqtt_cfg.get("enabled", False))
@@ -501,6 +557,9 @@ class CameraAgent:
     def upload_pending(self) -> float | None:
         """Upload every queued item. Return None when the queue is drained, or a retry hint
         (seconds, 0 = use backoff) when a transient error stopped the run."""
+        if not self.accepting_uploads.is_set():
+            # FAULT/MAINTENANCE on the server: keep media queued, the heartbeat thread wakes us up.
+            return float(self.heartbeat_interval) if self.spool.count_pending() else None
         for row in self.spool.pending():
             if STOP.is_set():
                 return None
@@ -518,6 +577,8 @@ class CameraAgent:
                 self.spool.mark_rejected(event_id, detail)
                 LOG.error("Server rejected %s: %s (file kept at %s, not retried)", event_id, detail, row["path"])
             else:
+                if "CAMERA_NOT_ACCEPTING" in detail:
+                    self.accepting_uploads.clear()
                 self.spool.mark_failed(event_id, detail)
                 self.last_upload_error = detail
                 LOG.warning("Upload %s deferred: %s", event_id, detail)
@@ -543,6 +604,44 @@ class CameraAgent:
                 break
             self.wake.set()
 
+    # ---------------------------------------------------------------- HTTPS heartbeat
+    def send_heartbeat(self) -> bool:
+        code, payload, detail = self.uploader.heartbeat({
+            "queuedMedia": self.spool.count_pending(),
+            "lastUploadError": self.last_upload_error,
+        })
+        if code == 0 or payload is None or not (200 <= code < 300):
+            if code in (401, 403):
+                LOG.error("Heartbeat refused (%s): token revoked/expired or camera decommissioned - ask Admin for a new token", detail)
+            else:
+                LOG.warning("Heartbeat failed: %s", detail)
+            return False
+        lifecycle = str(payload.get("lifecycle") or "")
+        if lifecycle != self.server_lifecycle:
+            LOG.info("Server lifecycle: %s (accepting uploads: %s)", lifecycle or "?", payload.get("acceptingUploads"))
+            self.server_lifecycle = lifecycle
+        if payload.get("acceptingUploads", True):
+            if not self.accepting_uploads.is_set():
+                self.accepting_uploads.set()
+                self.wake.set()  # flush media queued while paused
+        else:
+            self.accepting_uploads.clear()
+        server_interval = payload.get("heartbeatIntervalSeconds")
+        if isinstance(server_interval, int) and 10 <= server_interval <= 3600 and server_interval != self.heartbeat_interval:
+            LOG.info("Heartbeat interval set by server: %ss", server_interval)
+            self.heartbeat_interval = server_interval
+        return True
+
+    def heartbeat_worker(self) -> None:
+        failures = 0
+        while not STOP.is_set():
+            ok = self.send_heartbeat()
+            failures = 0 if ok else failures + 1
+            # Back off a little after repeated failures, but never beyond the interval x 2.
+            delay = self.heartbeat_interval if ok else min(self.heartbeat_interval * 2, self.retry_min * (2 ** min(failures, 5)))
+            if STOP.wait(delay):
+                break
+
     # ---------------------------------------------------------------- main loop
     def run(self) -> None:
         if self.client:
@@ -551,14 +650,16 @@ class CameraAgent:
             self.client.loop_start()
         worker = threading.Thread(target=self.upload_worker, name="uploader", daemon=True)
         worker.start()
+        if self.http_heartbeat:
+            threading.Thread(target=self.heartbeat_worker, name="heartbeat", daemon=True).start()
         capture_cfg = self.config["capture"]
         interval = int(capture_cfg.get("interval_seconds", 0))
-        heartbeat_interval = max(10, int(self.config.get("heartbeat_interval_seconds", 30)))
-        LOG.info("Agent %s started: camera=%s upload=%s periodic=%ss mqtt=%s", AGENT_VERSION, self.camera_id,
-                 self.uploader.url, interval or "off", "on" if self.client else "off")
+        LOG.info("Agent %s started: camera=%s upload=%s heartbeat=%s periodic=%ss mqtt=%s", AGENT_VERSION, self.camera_id,
+                 self.uploader.url, f"{self.heartbeat_interval}s" if self.http_heartbeat else "off",
+                 interval or "off", "on" if self.client else "off")
         while not STOP.wait(1):
             now = time.monotonic()
-            if self.online.is_set() and now - self.last_heartbeat >= heartbeat_interval:
+            if self.online.is_set() and now - self.last_heartbeat >= self.heartbeat_interval:
                 self.publish("heartbeat", {"cameraId": self.camera_id, "state": "online", "at": utc_now(),
                                            "queuedMedia": self.spool.count_pending(),
                                            "lastUploadError": self.last_upload_error, "agentVersion": AGENT_VERSION})
@@ -585,14 +686,23 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
     parser.add_argument("--check-camera", action="store_true", help="Take one test photo (no upload) and exit")
     parser.add_argument("--check-upload", action="store_true", help="Take one photo, upload it over HTTPS and exit")
+    parser.add_argument("--check-heartbeat", action="store_true", help="Send one HTTPS heartbeat (marks the camera online) and exit")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         config = load_config(args.config)
-        if args.check_camera or args.check_upload:
+        if args.check_camera or args.check_upload or args.check_heartbeat:
             config = {**config, "mqtt": {"enabled": False}}
         agent = CameraAgent(config)
+        if args.check_heartbeat:
+            code, payload, detail = agent.uploader.heartbeat({"queuedMedia": agent.spool.count_pending()})
+            if 200 <= code < 300 and payload is not None:
+                LOG.info("Heartbeat OK: lifecycle=%s acceptingUploads=%s interval=%ss",
+                         payload.get("lifecycle"), payload.get("acceptingUploads"), payload.get("heartbeatIntervalSeconds"))
+                return 0
+            LOG.error("Heartbeat failed: %s", detail)
+            return 2
         if args.check_camera:
             item = agent.capture_image(camera=str(config["capture"].get("camera", "back")))
             agent.spool.remove(item["event_id"])

@@ -6,6 +6,7 @@ const env = require('../config/env');
 const alertService = require('./alert.service');
 const socket = require('./socket.service');
 const audit = require('./audit.service');
+const aiPrediction = require('./ai-prediction.service');
 
 exports.fullInclude = [
   { association: 'device', attributes: ['id', 'deviceCode', 'name', 'location'] },
@@ -70,14 +71,6 @@ async function loadDuplicate(eventId) {
 // Luồng Camera HTTP: nhận ảnh từ Camera -> gọi AI -> upload Cloudinary -> lưu URL + kết quả AI trong leafAnalyses.
 exports.processCameraImage = async ({ camera, eventId, capturedAt: capturedAtInput, image }) => {
   if (!camera || camera.type !== 'CAMERA') throw ApiError.forbidden('Thiết bị gửi dữ liệu không phải CAMERA');
-  if (!env.ai.apiUrl || !env.ai.apiKey) throw new ApiError(503, 'Chưa cấu hình AI_API_URL và AI_API_KEY');
-
-  const { detectImageMimeType } = require('./analysis-result-payload');
-  const actualMime = detectImageMimeType(image.buffer);
-  if (!actualMime || !['image/jpeg', 'image/png', 'image/webp'].includes(actualMime)) {
-    throw ApiError.badRequest('Nội dung file không phải ảnh JPEG, PNG hoặc WebP hợp lệ');
-  }
-  if (image.buffer.length > 10 * 1024 * 1024) throw ApiError.badRequest('Ảnh vượt giới hạn 10 MB');
 
   const existing = await LeafAnalysis.findOne({ where: { eventId } });
   if (existing) {
@@ -94,42 +87,12 @@ exports.processCameraImage = async ({ camera, eventId, capturedAt: capturedAtInp
     throw ApiError.badRequest('metadata.capturedAt không hợp lệ');
   }
 
-  const form = new FormData();
-  form.append('file', new Blob([image.buffer], { type: actualMime }), image.originalName || 'camera-image');
-  let response;
-  try {
-    response = await fetch(`${env.ai.apiUrl.replace(/\/+$/, '')}/predict`, {
-      method: 'POST',
-      headers: { 'X-API-Key': env.ai.apiKey },
-      body: form,
-      signal: AbortSignal.timeout(env.ai.requestTimeoutMs),
-    });
-  } catch (error) {
-    throw new ApiError(502, `Không kết nối được AI: ${String(error.message || error).slice(0, 180)}`);
-  }
-  let aiResult;
-  try { aiResult = await response.json(); }
-  catch { throw new ApiError(502, 'AI trả về response không phải JSON hợp lệ'); }
-  if (!response.ok || aiResult.success !== true) {
-    throw new ApiError(502, `AI từ chối phân tích ảnh (HTTP ${response.status})`);
-  }
+  const { actualMime, result: aiResult } = await aiPrediction.predictImage(image);
 
   const label = aiResult.label;
   const labelVi = aiResult.label_vi;
   const confidence = aiResult.confidence;
   const predictions = aiResult.predictions;
-  if (typeof label !== 'string' || !label.trim() || typeof labelVi !== 'string' || !labelVi.trim()
-      || typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1
-      || typeof aiResult.is_healthy !== 'boolean' || !Array.isArray(predictions)) {
-    throw new ApiError(502, 'Response AI không đúng schema: cần label, label_vi, confidence, is_healthy, predictions');
-  }
-  for (const item of predictions) {
-    if (!item || typeof item.label !== 'string' || typeof item.label_vi !== 'string'
-        || typeof item.confidence !== 'number' || !Number.isFinite(item.confidence)
-        || item.confidence < 0 || item.confidence > 1) {
-      throw new ApiError(502, 'Một phần tử predictions từ AI không hợp lệ');
-    }
-  }
 
   const disease = await Disease.findOne({ where: { modelLabel: label.trim() } })
     || await Disease.findOne({ where: { nameVi: labelVi.trim() } });

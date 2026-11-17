@@ -81,6 +81,8 @@ Alert.belongsTo(LeafAnalysis, { foreignKey: 'analysisId', as: 'analysis' });
 // Kết quả AI có thể gắn thiết bị cũ hoặc deviceId = NULL cho nguồn ngoài không quản lý như IoT device.
 Device.hasMany(LeafAnalysis, { foreignKey: 'deviceId', as: 'analyses', onDelete: 'CASCADE' });
 LeafAnalysis.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
+User.hasMany(LeafAnalysis, { foreignKey: 'uploadedBy', as: 'uploadedAnalyses', onDelete: 'SET NULL' });
+LeafAnalysis.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploader' });
 
 // Kết quả AI -> bệnh / thiếu dinh dưỡng
 Disease.hasMany(LeafAnalysis, { foreignKey: 'diseaseId', as: 'analyses' });

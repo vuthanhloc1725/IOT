@@ -1,8 +1,10 @@
 {
   "camera_id": "CAM-001",
-  "heartbeat_interval_seconds": 30,
+  "heartbeat_interval_seconds": 60,
   "upload": {
     "url": "https://api.example.org/api/camera/media",
+    "heartbeat_url": "https://api.example.org/api/camera/heartbeat",
+    "http_heartbeat": true,
     "token": "REPLACE_WITH_DEVICE_TOKEN",
     "ca_file": "",
     "allow_insecure_http": false,
