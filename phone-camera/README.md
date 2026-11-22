@@ -100,6 +100,19 @@ ip -4 addr | grep inet                        # lấy IP LAN của máy, ví d�
 
 **C. Trên điện thoại (Termux)**
 
+Cách nhanh — chỉ đổi URL server + token (đa số trường hợp: đổi IP máy, cấp lại token):
+
+```sh
+cd ~/phone-camera
+bash scripts/set_server.sh      # hỏi URL → token → mã camera; Enter = giữ nguyên
+# hoặc một dòng: bash scripts/set_server.sh http://192.168.1.10:3000 <token> CAM-001
+```
+
+Script tự ghi `upload.url`, `upload.heartbeat_url`, `allow_insecure_http` (khi dùng `http://`), `token`
+vào `config.json` (bản cũ lưu ở `config.json.bak`), rồi gửi thử 1 heartbeat. Xong thì khởi động lại agent.
+
+Cách đầy đủ — gộp nguyên file config.json tải từ web:
+
 ```sh
 cd ~/phone-camera
 bash scripts/install_termux.sh                # lần đầu: cài gói, tạo config.json từ config.example.json
@@ -192,7 +205,10 @@ Các trường cần sửa:
   đường dẫn `/data/data/com.termux/files/home/phone-camera/server-ca.pem`.
 - `upload.max_media_bytes`: không lớn hơn giới hạn server (backend hiện dùng 5 MB
   cho ảnh AI). Ảnh 12MP gốc thường 3–8 MB, nên giữ `capture.resize_max_width: 1920`.
-- `capture.interval_seconds`: chu kỳ chụp (giây), `0` = chỉ chụp theo lệnh MQTT.
+- `capture.interval_seconds`: chu kỳ chụp ban đầu (giây), `0` = chỉ chụp theo yêu cầu. Từ agent 0.4.0, Admin đổi
+  chu kỳ ngay trên web (trang Camera → "Chu kỳ chụp"); agent áp dụng trong ≤ 25s, không cần sửa file hay restart.
+- `upload.http_commands` (mặc định `true`): agent long-poll `/api/camera/commands/poll` để nút **Chụp ngay**
+  trên web chạy trong 1–2 giây mà không cần MQTT. Đặt `false` để tắt.
 - `mqtt.enabled`: `true` nếu muốn nhận lệnh chụp từ dashboard (điền host/user/password).
 
 Chỉ thử trong mạng LAN không có TLS: dùng `http://…` và `"allow_insecure_http": true`

@@ -28,6 +28,7 @@ async function handleUnauthorized(status) {
 export async function request(path, { method = 'GET', params, body } = {}) {
   const token = getToken();
   const response = await fetch(makeUrl(path, params), {
+    cache: 'no-store', // dữ liệu IoT thay đổi liên tục; tránh trình duyệt trả 304 từ cache
     method,
     headers: {
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),

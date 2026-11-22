@@ -1666,3 +1666,13 @@ button:disabled {
 .camera-hint{padding:4px 8px;border:1px solid #263654;border-radius:999px;background:#0a101c;color:#9bcdf5;font:inherit;font-size:12px;cursor:pointer}
 .camera-hint:hover{border-color:#3b82f6}
 .camera-hint.is-active{border-color:#3b82f6;background:#13233f;color:#dbeafe}
+
+/* Camera: chụp ngay + chu kỳ chụp */
+.camera-controls{display:flex;flex-direction:column;gap:8px;margin:12px 0;padding:10px;border:1px solid #243451;border-radius:8px;background:#0c1220}
+.camera-controls__row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.camera-controls .notice{margin:0}
+.camera-interval{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid #1c2944}
+.camera-interval__label{font-size:11px;font-weight:600;color:#5f7599}
+.camera-interval select{min-width:0;flex:1 1 150px}
+.camera-interval select.camera-interval__unit{flex:0 0 76px;width:76px}
+.camera-interval__amount{width:72px;min-height:35px;padding:8px 10px;border:1px solid #283957;border-radius:5px;background:#111b2e;color:#dce7f7;font:inherit;font-size:12px}

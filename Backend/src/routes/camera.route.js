@@ -39,6 +39,30 @@ router.post(
     ctrl.receiveMedia,
 );
 
+// ---- Agent: long-poll nhận lệnh "chụp ngay" + ack kết quả (mỗi poll giữ ≤ 25s nên 60/phút là dư) ----
+router.post(
+    '/commands/poll',
+    rateLimit({ windowMs: 60_000, limit: 60, message: { error: { status: 429, message: 'Poll lệnh quá dày, thử lại sau' } } }),
+    cameraAuth,
+    ctrl.pollCommands,
+);
+router.post(
+    '/commands/:requestId/ack',
+    rateLimit({ windowMs: 60_000, limit: 60, message: { error: { status: 429, message: 'Ack quá nhiều, thử lại sau' } } }),
+    cameraAuth,
+    ctrl.ackCommand,
+);
+
+// ---- Web: đổi chu kỳ chụp (Admin), chụp ngay + xem trạng thái lệnh (Admin hoặc người được gán Camera) ----
+router.patch('/:cameraId/config', authenticate, requireRole('admin'), ctrl.updateConfig);
+router.post(
+    '/:cameraId/capture',
+    authenticate,
+    rateLimit({ windowMs: 60_000, limit: 10, message: { error: { status: 429, message: 'Bấm chụp quá nhanh, thử lại sau' } } }),
+    ctrl.captureNow,
+);
+router.get('/:cameraId/commands/:requestId', authenticate, ctrl.commandStatus);
+
 // ---- Xem / quản lý media lưu đĩa (JWT người dùng) ----
 router.get('/media', authenticate, ctrl.list);
 router.get('/media/:eventId/file', authenticate, ctrl.getFile);

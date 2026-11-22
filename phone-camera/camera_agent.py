@@ -34,7 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - depends on the device
     mqtt = None  # type: ignore[assignment]
 
 
-AGENT_VERSION = "0.3.0"
+AGENT_VERSION = "0.4.0"
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("phone-camera")
 STOP = threading.Event()
@@ -55,6 +55,12 @@ def heartbeat_url(upload_cfg: dict[str, Any]) -> str:
         return explicit
     url = str(upload_cfg.get("url", "")).rstrip("/")
     return (url[: -len("/media")] if url.endswith("/media") else url) + "/heartbeat"
+
+
+def api_base_url(upload_cfg: dict[str, Any]) -> str:
+    """.../api/camera (derived from the heartbeat URL) - base for /commands/poll and /commands/<id>/ack."""
+    url = heartbeat_url(upload_cfg).rstrip("/")
+    return url[: -len("/heartbeat")] if url.endswith("/heartbeat") else url
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -247,12 +253,26 @@ class HttpsUploader:
         context = ssl.create_default_context(cafile=str(Path(ca_file).expanduser()) if ca_file else None)
         self.opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=context))
         self.heartbeat_url = heartbeat_url(cfg)
+        self.api_base = api_base_url(cfg)
 
     def heartbeat(self, status: dict[str, Any]) -> tuple[int, dict[str, Any] | None, str]:
         """POST a JSON heartbeat. Returns (http_status or 0 for network error, server JSON, detail)."""
-        body = json.dumps({"cameraId": self.camera_id, "at": utc_now(), "agentVersion": AGENT_VERSION, **status},
-                          separators=(",", ":")).encode("utf-8")
-        request = urllib.request.Request(self.heartbeat_url, data=body, method="POST", headers={
+        body = {"cameraId": self.camera_id, "at": utc_now(), "agentVersion": AGENT_VERSION, **status}
+        return self._post_json(self.heartbeat_url, body, min(self.timeout, 20))
+
+    def poll_commands(self, wait_seconds: int) -> tuple[int, dict[str, Any] | None, str]:
+        """Long-poll for on-demand commands; the server holds the request up to wait_seconds."""
+        return self._post_json(f"{self.api_base}/commands/poll", {"waitSeconds": wait_seconds}, wait_seconds + 15)
+
+    def ack_command(self, request_id: str, result: dict[str, Any]) -> tuple[int, dict[str, Any] | None, str]:
+        body = {"success": bool(result.get("success")), "message": result.get("message"), "eventId": result.get("eventId")}
+        quoted = urllib.parse.quote(request_id, safe="")
+        return self._post_json(f"{self.api_base}/commands/{quoted}/ack", body, min(self.timeout, 20))
+
+    def _post_json(self, url: str, data: dict[str, Any], timeout: float) -> tuple[int, dict[str, Any] | None, str]:
+        """POST JSON with the camera token. Returns (http_status or 0 for network error, server JSON, detail)."""
+        body = json.dumps(data, separators=(",", ":")).encode("utf-8")
+        request = urllib.request.Request(url, data=body, method="POST", headers={
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -260,7 +280,7 @@ class HttpsUploader:
             "X-Camera-Id": self.camera_id,
         })
         try:
-            with self.opener.open(request, timeout=min(self.timeout, 20)) as response:
+            with self.opener.open(request, timeout=timeout) as response:
                 raw = response.read(MAX_RESPONSE_BYTES)
                 code = response.status
         except urllib.error.HTTPError as exc:
@@ -346,6 +366,12 @@ class CameraAgent:
         self.accepting_uploads = threading.Event()
         self.accepting_uploads.set()
         self.server_lifecycle: str | None = None
+        # Periodic capture interval: starts from config.json, then follows the web (heartbeat / command poll).
+        self.capture_interval = max(0, int(config["capture"].get("interval_seconds", 0)))
+        # On-demand "capture now" from the web, delivered by HTTPS long-poll (works without MQTT).
+        self.http_commands = bool(upload_cfg.get("http_commands", True))
+        self._inflight: set[str] = set()
+        self._inflight_lock = threading.Lock()
 
         mqtt_cfg = config.get("mqtt") or {}
         self.mqtt_enabled = bool(mqtt_cfg.get("enabled", False))
@@ -416,7 +442,21 @@ class CameraAgent:
         result = {"requestId": request_id, "cameraId": self.camera_id, "success": success, "message": message,
                   "eventId": event_id, "completedAt": utc_now()}
         self.spool.save_command(request_id, result)
+        self._send_ack(result)
+
+    def _send_ack(self, result: dict[str, Any]) -> None:
         self.publish("command_ack", result)
+        if not self.http_commands:
+            return
+        for attempt in range(3):
+            code, _payload, detail = self.uploader.ack_command(str(result["requestId"]), result)
+            if 200 <= code < 300 or code in (400, 401, 403, 404):
+                if not 200 <= code < 300:
+                    LOG.warning("Command ack %s refused: %s", result["requestId"], detail)
+                return
+            if STOP.wait(2 * (attempt + 1)):
+                return
+        LOG.warning("Command ack %s failed: %s", result["requestId"], detail)
 
     def handle_command(self, command: dict[str, Any]) -> None:
         request_id = str(command.get("requestId", ""))
@@ -425,8 +465,9 @@ class CameraAgent:
             return
         prior = self.spool.get_command(request_id)
         if prior:
-            self.publish("command_ack", prior)
+            self._send_ack(prior)
             return
+        LOG.info("Command %s: %s", request_id, command.get("action"))
         action = command.get("action")
         if action not in ("capture", "record_video"):
             self._ack_command(request_id, False, "unsupported_action")
@@ -435,6 +476,7 @@ class CameraAgent:
             camera = str(command.get("camera", self.config["capture"].get("camera", "back")))
             item = self.capture_image(request_id, camera) if action == "capture" else self.capture_video(request_id, command)
             self._ack_command(request_id, True, "media_queued", item["event_id"])
+            self.wake.set()  # upload right away instead of waiting for the uploader's next round
         except Exception as exc:
             LOG.exception("Capture request failed")
             self._ack_command(request_id, False, str(exc)[:160])
@@ -630,7 +672,62 @@ class CameraAgent:
         if isinstance(server_interval, int) and 10 <= server_interval <= 3600 and server_interval != self.heartbeat_interval:
             LOG.info("Heartbeat interval set by server: %ss", server_interval)
             self.heartbeat_interval = server_interval
+        self.apply_capture_interval(payload.get("captureIntervalSeconds"))
+        self.dispatch_commands(payload.get("commands"))
         return True
+
+    def apply_capture_interval(self, value: Any) -> None:
+        """0 = periodic capture off (on-demand only); 5..86400 seconds; anything else (null) keeps the current value."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return
+        if value != 0 and not 5 <= value <= 86400:
+            return
+        if value != self.capture_interval:
+            LOG.info("Capture interval set by server: %s", f"{value}s" if value else "off (on-demand only)")
+            self.capture_interval = value
+
+    def dispatch_commands(self, commands: Any) -> None:
+        if not isinstance(commands, list):
+            return
+        for command in commands[:10]:
+            if isinstance(command, dict):
+                threading.Thread(target=self._run_command_once, args=(command,), daemon=True).start()
+
+    def _run_command_once(self, command: dict[str, Any]) -> None:
+        """Heartbeat and long-poll may both hand over a redelivered command; run each requestId once at a time."""
+        request_id = str(command.get("requestId", ""))
+        with self._inflight_lock:
+            if request_id in self._inflight:
+                return
+            self._inflight.add(request_id)
+        try:
+            self.handle_command(command)
+        finally:
+            with self._inflight_lock:
+                self._inflight.discard(request_id)
+
+    def command_worker(self) -> None:
+        """Long-poll /api/camera/commands/poll so "Chụp ngay" on the web fires within a second or two."""
+        failures = 0
+        while not STOP.is_set():
+            code, payload, detail = self.uploader.poll_commands(25)
+            if 200 <= code < 300 and payload is not None:
+                failures = 0
+                self.apply_capture_interval(payload.get("captureIntervalSeconds"))
+                self.dispatch_commands(payload.get("commands"))
+                continue
+            failures += 1
+            if code == 404:
+                LOG.warning("Server has no /commands/poll (old Backend?) - on-demand capture falls back to heartbeat")
+                delay = 300
+            elif code in (401, 403):
+                delay = 60  # the heartbeat worker already logs token problems
+            else:
+                if failures == 1 or failures % 10 == 0:
+                    LOG.warning("Command poll failed: %s", detail)
+                delay = min(60, self.retry_min * (2 ** min(failures, 4)))
+            if STOP.wait(delay):
+                break
 
     def heartbeat_worker(self) -> None:
         failures = 0
@@ -652,11 +749,12 @@ class CameraAgent:
         worker.start()
         if self.http_heartbeat:
             threading.Thread(target=self.heartbeat_worker, name="heartbeat", daemon=True).start()
+        if self.http_commands:
+            threading.Thread(target=self.command_worker, name="commands", daemon=True).start()
         capture_cfg = self.config["capture"]
-        interval = int(capture_cfg.get("interval_seconds", 0))
-        LOG.info("Agent %s started: camera=%s upload=%s heartbeat=%s periodic=%ss mqtt=%s", AGENT_VERSION, self.camera_id,
-                 self.uploader.url, f"{self.heartbeat_interval}s" if self.http_heartbeat else "off",
-                 interval or "off", "on" if self.client else "off")
+        LOG.info("Agent %s started: camera=%s upload=%s heartbeat=%s periodic=%ss commands=%s mqtt=%s", AGENT_VERSION,
+                 self.camera_id, self.uploader.url, f"{self.heartbeat_interval}s" if self.http_heartbeat else "off",
+                 self.capture_interval or "off", "https-poll" if self.http_commands else "off", "on" if self.client else "off")
         while not STOP.wait(1):
             now = time.monotonic()
             if self.online.is_set() and now - self.last_heartbeat >= self.heartbeat_interval:
@@ -664,6 +762,7 @@ class CameraAgent:
                                            "queuedMedia": self.spool.count_pending(),
                                            "lastUploadError": self.last_upload_error, "agentVersion": AGENT_VERSION})
                 self.last_heartbeat = now
+            interval = self.capture_interval
             if interval > 0 and (self.last_capture == 0 or now - self.last_capture >= interval):
                 self.last_capture = now
                 try:

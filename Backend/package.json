@@ -8,7 +8,7 @@
     "dev": "node --watch server.js",
     "mqtt:setup": "node scripts/setup-local-mqtt.js",
     "mqtt:start": "mosquitto -c .mqtt/mosquitto.conf -d",
-    "test:security": "node --test tests/mqtt-tls.test.js tests/command-ack-security.test.js tests/external-analysis-result.test.js tests/analysis-image-storage.test.js tests/device-probe-validation.test.js tests/threshold-lifecycle-session.test.js tests/mqtt-acl-consistency.test.js tests/code-generator.test.js tests/node-claim.test.js tests/mqtt-dynsec.test.js tests/camera-upload.test.js tests/camera-lifecycle.test.js tests/ai-prediction.test.js tests/user-upload-analysis.test.js",
+    "test:security": "node --test tests/mqtt-tls.test.js tests/command-ack-security.test.js tests/external-analysis-result.test.js tests/analysis-image-storage.test.js tests/device-probe-validation.test.js tests/threshold-lifecycle-session.test.js tests/mqtt-acl-consistency.test.js tests/code-generator.test.js tests/node-claim.test.js tests/mqtt-dynsec.test.js tests/camera-upload.test.js tests/camera-lifecycle.test.js tests/ai-prediction.test.js tests/user-upload-analysis.test.js tests/camera-command.test.js",
     "seed:admin": "node scripts/seed-admin.js",
     "seed": "node scripts/seed.js"
   },

@@ -20,6 +20,8 @@ const analysisService = require('../services/analysis.service');
 const cameraService = require('../services/camera.service');
 const { createWithSequentialCode } = require('../services/code-generator');
 const cameraLifecycle = require('../services/camera-lifecycle.service');
+const cameraCommands = require('../services/camera-command.service');
+const socket = require('../services/socket.service');
 
 const AI_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -204,15 +206,148 @@ exports.revokeToken = async (req, res) => {
 // camera-auth đã cập nhật lastUsedAt + tự ACTIVE ở lần đầu. Trả cấu hình để agent tự đồng bộ.
 exports.heartbeat = async (req, res) => {
     const camera = req.camera;
+    cameraCommands.noteAgentVersion(camera.deviceCode, req.body?.agentVersion);
     res.json({
         status: 'ok',
         cameraId: camera.deviceCode,
         lifecycle: camera.lifecycle,
         acceptingUploads: ['PROVISIONED', 'ACTIVE'].includes(camera.lifecycle),
         heartbeatIntervalSeconds: cameraLifecycle.heartbeatIntervalSec(camera),
-        captureIntervalSeconds: Number(camera.config?.captureIntervalSeconds) || null,
+        captureIntervalSeconds: captureIntervalOf(camera),
+        configVersion: Number(camera.configVersion || 0),
+        // Fallback cho agent không long-poll: lệnh "chụp ngay" đang chờ được giao kèm heartbeat.
+        // Agent cũ (< 0.4.0) bỏ qua trường này → không giao, để lệnh không kẹt ở DELIVERED.
+        commands: cameraCommands.supportsCommands(camera.deviceCode) === false
+            ? [] : await cameraCommands.waitForCommands(camera.deviceCode, 0),
         serverTime: new Date().toISOString(),
     });
+};
+
+// 0 = tắt chụp định kỳ (chỉ chụp theo yêu cầu); null = chưa cấu hình (agent giữ giá trị trong config.json).
+function captureIntervalOf(camera) {
+    const raw = camera.config?.captureIntervalSeconds;
+    if (raw === undefined || raw === null || raw === '') return null;
+    const value = Number(raw);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function parseIntervalField(body, key, { min, max, allowZero }) {
+    if (body?.[key] === undefined) return undefined;
+    const value = Number(body[key]);
+    if (!Number.isInteger(value) || (!(allowZero && value === 0) && (value < min || value > max))) {
+        throw ApiError.badRequest(`${key} phải là ${allowZero ? '0 (tắt) hoặc ' : ''}số nguyên từ ${min} đến ${max} giây`);
+    }
+    return value;
+}
+
+async function findCameraFor(req, { adminOnly = false } = {}) {
+    const code = String(req.params.cameraId || '').trim();
+    if (!code || code.length > 50) throw ApiError.badRequest('cameraId không hợp lệ');
+    if (adminOnly && req.user.role !== 'admin') throw ApiError.forbidden();
+    const allowed = await cameraLifecycle.accessibleCameraCodes(req.user);
+    if (allowed !== null && !allowed.includes(code)) throw ApiError.notFound('Không tìm thấy Camera');
+    const camera = await Device.findOne({ where: { deviceCode: code, type: 'CAMERA' } });
+    if (!camera) throw ApiError.notFound('Không tìm thấy Camera');
+    return camera;
+}
+
+// ---- Admin: đổi chu kỳ chụp / heartbeat. Agent nhận ở lần heartbeat kế tiếp (≤ heartbeatIntervalSeconds) ----
+exports.updateConfig = async (req, res) => {
+    const camera = await findCameraFor(req, { adminOnly: true });
+    const capture = parseIntervalField(req.body, 'captureIntervalSeconds', { min: 5, max: 86400, allowZero: true });
+    const heartbeat = parseIntervalField(req.body, 'heartbeatIntervalSeconds', { min: 10, max: 3600, allowZero: false });
+    if (capture === undefined && heartbeat === undefined) {
+        throw ApiError.badRequest('Cần captureIntervalSeconds và/hoặc heartbeatIntervalSeconds');
+    }
+    const before = { ...(camera.config || {}) };
+    const next = { ...before };
+    if (capture !== undefined) next.captureIntervalSeconds = capture;
+    if (heartbeat !== undefined) next.heartbeatIntervalSeconds = heartbeat;
+    camera.config = next; // gán object mới để Sequelize nhận thay đổi cột JSON
+    camera.configVersion = Number(camera.configVersion || 0) + 1;
+    await camera.save();
+    await audit.log(req, {
+        action: 'camera.config_updated', entityType: 'device', entityId: camera.id,
+        detail: { cameraId: camera.deviceCode, before, after: next },
+    });
+    const view = cameraLifecycle.toView(camera, null);
+    try { socket.emitDevice(camera.id, 'device:update', view); } catch { /* socket chưa khởi tạo (test/CLI) */ }
+    res.json({
+        message: 'Đã lưu. Camera áp dụng ở lần heartbeat kế tiếp.',
+        data: {
+            cameraId: camera.deviceCode,
+            captureIntervalSeconds: captureIntervalOf(camera),
+            heartbeatIntervalSeconds: cameraLifecycle.heartbeatIntervalSec(camera),
+            configVersion: camera.configVersion,
+        },
+    });
+};
+
+// ---- Người dùng được gán / Admin: chụp ngay ----
+exports.captureNow = async (req, res) => {
+    const camera = await findCameraFor(req);
+    if (!['PROVISIONED', 'ACTIVE'].includes(camera.lifecycle)) {
+        throw ApiError.conflict(`Camera đang ${camera.lifecycle}, chưa nhận lệnh chụp (cần cấp token và chạy agent)`);
+    }
+    if (cameraCommands.supportsCommands(camera.deviceCode) === false) {
+        throw ApiError.coded(409, 'AGENT_OUTDATED',
+            `Agent trên điện thoại là bản ${cameraCommands.agentVersion(camera.deviceCode)}, chưa hỗ trợ "Chụp ngay". `
+            + `Hãy chép camera_agent.py mới (>= ${cameraCommands._constants.MIN_AGENT_VERSION}) lên điện thoại rồi khởi động lại agent.`);
+    }
+    const side = req.body?.camera === undefined ? 'back' : String(req.body.camera);
+    if (!['back', 'front'].includes(side)) throw ApiError.badRequest('camera phải là "back" hoặc "front"');
+    let cmd;
+    try {
+        cmd = cameraCommands.enqueue({ cameraCode: camera.deviceCode, action: 'capture', camera: side, requestedBy: req.user.id });
+    } catch (err) {
+        if (err.code === 'TOO_MANY_PENDING') throw ApiError.coded(429, 'TOO_MANY_PENDING', err.message);
+        throw err;
+    }
+    await audit.log(req, {
+        action: 'camera.capture_requested', entityType: 'device', entityId: camera.id,
+        detail: { cameraId: camera.deviceCode, requestId: cmd.requestId },
+    });
+    res.status(202).json({ message: 'Đã gửi lệnh chụp, chờ Camera thực hiện', data: cmd });
+};
+
+exports.commandStatus = async (req, res) => {
+    const camera = await findCameraFor(req);
+    const cmd = cameraCommands.get(camera.deviceCode, String(req.params.requestId || ''));
+    if (!cmd) throw ApiError.notFound('Không tìm thấy lệnh (đã hết hạn hoặc server vừa khởi động lại)');
+    res.set('Cache-Control', 'no-store'); // web hỏi liên tục, không để trình duyệt trả 304 từ cache
+    res.json({ data: cmd });
+};
+
+// ---- Camera/Agent: long-poll nhận lệnh + báo kết quả (Bearer camera token) ----
+const MAX_POLL_WAIT_SEC = 25;
+
+exports.pollCommands = async (req, res) => {
+    const requested = Number(req.body?.waitSeconds ?? MAX_POLL_WAIT_SEC);
+    const waitSec = Number.isFinite(requested) ? Math.min(Math.max(requested, 0), MAX_POLL_WAIT_SEC) : MAX_POLL_WAIT_SEC;
+    cameraCommands.noteCommandCapable(req.camera.deviceCode);
+    const controller = new AbortController();
+    // res 'close' (không phải req 'close'): req đóng ngay khi đọc xong body JSON trên Node mới.
+    res.on('close', () => controller.abort());
+    const commands = await cameraCommands.waitForCommands(req.camera.deviceCode, waitSec * 1000, controller.signal);
+    if (controller.signal.aborted || res.writableEnded) return;
+    res.json({
+        commands,
+        captureIntervalSeconds: captureIntervalOf(req.camera),
+        serverTime: new Date().toISOString(),
+    });
+};
+
+exports.ackCommand = async (req, res) => {
+    const requestId = String(req.params.requestId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) throw ApiError.badRequest('requestId không hợp lệ');
+    if (typeof req.body?.success !== 'boolean') throw ApiError.badRequest('success phải là boolean');
+    const cmd = cameraCommands.ack({
+        cameraCode: req.camera.deviceCode, requestId,
+        success: req.body.success, message: req.body.message, eventId: req.body.eventId,
+    });
+    if (!cmd) throw ApiError.notFound('Không tìm thấy lệnh');
+    try { socket.emitDevice(req.camera.id, 'camera:command', cmd); } catch { /* socket chưa khởi tạo */ }
+    res.json({ status: 'ok', data: cmd });
 };
 
 // ---- Upload: phone/agent gọi POST /api/camera/media ----

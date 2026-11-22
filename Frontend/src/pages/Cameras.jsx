@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BrainCircuit, Camera, Check, Copy, Download, Image, KeyRound, Plus, RefreshCw, Save, ShieldOff, Trash2, Wifi, WifiOff, X } from 'lucide-react';
+import { Aperture, BrainCircuit, Camera, Check, Copy, Download, Image, KeyRound, Plus, RefreshCw, Save, ShieldOff, Trash2, Wifi, WifiOff, X } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import { useAuth } from '../auth/AuthContext';
 import { getSocket } from '../api/socket';
@@ -90,6 +90,172 @@ function CopyButton({ text, label = 'Sao chép' }) {
     <button type="button" className="secondary-button compact-button" onClick={async () => { if (await copyText(text)) { setDone(true); setTimeout(() => setDone(false), 1500); } }}>
       {done ? <Check size={13} /> : <Copy size={13} />}{done ? 'Đã chép' : label}
     </button>
+  );
+}
+
+function formatInterval(sec) {
+  const n = Number(sec);
+  if (sec === null || sec === undefined || sec === '' || !Number.isFinite(n)) return '—';
+  if (n === 0) return 'Tắt (chỉ chụp theo yêu cầu)';
+  if (n % 3600 === 0) return `mỗi ${n / 3600} giờ`;
+  if (n % 60 === 0) return `mỗi ${n / 60} phút`;
+  return `mỗi ${n} giây`;
+}
+
+const INTERVAL_PRESETS = [
+  { value: 0, label: 'Tắt — chỉ chụp khi bấm' },
+  { value: 60, label: '1 phút' },
+  { value: 300, label: '5 phút' },
+  { value: 900, label: '15 phút' },
+  { value: 1800, label: '30 phút' },
+  { value: 3600, label: '1 giờ' },
+  { value: 21600, label: '6 giờ' },
+  { value: 43200, label: '12 giờ (2 lần/ngày)' },
+  { value: 86400, label: '24 giờ (1 lần/ngày)' },
+];
+const UNIT_SEC = { s: 1, m: 60, h: 3600 };
+const CMD_LABEL = {
+  SENDING: 'Đang gửi lệnh…',
+  PENDING: 'Đã gửi, chờ điện thoại nhận lệnh…',
+  DELIVERED: 'Điện thoại đang chụp…',
+  DONE: 'Đã chụp, ảnh đang được tải lên.',
+  FAILED: 'Chụp thất bại',
+  EXPIRED: 'Điện thoại không phản hồi (agent tắt hoặc mất mạng?)',
+};
+
+function splitInterval(sec) {
+  if (sec > 0 && sec % 3600 === 0) return { amount: sec / 3600, unit: 'h' };
+  if (sec > 0 && sec % 60 === 0) return { amount: sec / 60, unit: 'm' };
+  return { amount: sec || 60, unit: 's' };
+}
+
+// Chụp ngay (mọi người được xem Camera) + đổi chu kỳ chụp (Admin).
+function CameraControls({ camera, canAdmin, onCaptured, onConfigSaved }) {
+  const current = camera.config?.captureIntervalSeconds;
+  const currentNum = current === undefined || current === null ? null : Number(current);
+  const [mode, setMode] = useState('preset');
+  const [preset, setPreset] = useState(0);
+  const [custom, setCustom] = useState({ amount: 60, unit: 's' });
+  const [saving, setSaving] = useState(false);
+  const [cfgMsg, setCfgMsg] = useState(null);
+  const [cmd, setCmd] = useState(null); // { status, message }
+  const pollRef = useRef(null);
+
+  useEffect(() => {
+    const isPreset = currentNum !== null && INTERVAL_PRESETS.some((p) => p.value === currentNum);
+    setMode(isPreset || currentNum === null ? 'preset' : 'custom');
+    setPreset(isPreset ? currentNum : 900);
+    setCustom(splitInterval(currentNum ?? 60));
+    setCfgMsg(null);
+  }, [camera.deviceCode, currentNum]);
+
+  useEffect(() => { setCmd(null); return () => clearTimeout(pollRef.current); }, [camera.deviceCode]);
+
+  const target = mode === 'preset' ? preset : Math.round(Number(custom.amount) * UNIT_SEC[custom.unit]);
+  const targetValid = Number.isInteger(target) && (target === 0 || (target >= 5 && target <= 86400));
+
+  const saveInterval = async () => {
+    if (!targetValid) { setCfgMsg({ kind: 'error', text: 'Chu kỳ phải từ 5 giây đến 24 giờ, hoặc Tắt.' }); return; }
+    setSaving(true);
+    setCfgMsg(null);
+    try {
+      await cameraApi.updateCameraConfig(camera.deviceCode, { captureIntervalSeconds: target });
+      setCfgMsg({ kind: 'success', text: `Đã lưu: ${formatInterval(target)}. Điện thoại áp dụng trong vòng ~25 giây.` });
+      onConfigSaved?.();
+    } catch (e) {
+      setCfgMsg({ kind: 'error', text: e.message || 'Không lưu được chu kỳ chụp' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const capture = async () => {
+    clearTimeout(pollRef.current);
+    setCmd({ status: 'SENDING' });
+    const code = camera.deviceCode;
+    let res;
+    try {
+      res = await cameraApi.captureNow(code);
+    } catch (e) {
+      setCmd({ status: 'FAILED', message: e.message });
+      return;
+    }
+    const requestId = res.data.requestId;
+    setCmd({ status: res.data.status });
+    const startedAt = Date.now();
+    const poll = async () => {
+      try {
+        const st = (await cameraApi.getCommandStatus(code, requestId)).data;
+        const stuck = st.status === 'PENDING' && Date.now() - startedAt > 30_000;
+        setCmd({
+          status: st.status,
+          message: stuck
+            ? 'Điện thoại chưa nhận lệnh sau 30 giây — kiểm tra agent trên điện thoại đang chạy bản camera_agent.py mới (0.4.0) và còn mạng'
+            : st.message,
+        });
+        if (st.status === 'DONE') {
+          // Agent ack khi ảnh đã vào hàng đợi; tải lại thư viện vài lần trong lúc ảnh được upload.
+          [1500, 6000, 15000].forEach((ms) => setTimeout(() => onCaptured?.(), ms));
+          return;
+        }
+        if (['FAILED', 'EXPIRED'].includes(st.status)) return;
+      } catch (e) {
+        setCmd({ status: 'FAILED', message: e.message });
+        return;
+      }
+      if (Date.now() - startedAt < 5.5 * 60_000) pollRef.current = setTimeout(poll, 1500);
+    };
+    pollRef.current = setTimeout(poll, 1000);
+  };
+
+  const canCapture = ['PROVISIONED', 'ACTIVE'].includes(camera.lifecycle);
+  const working = cmd && ['SENDING', 'PENDING', 'DELIVERED'].includes(cmd.status);
+  const cmdKind = !cmd ? '' : cmd.status === 'DONE' ? 'success' : ['FAILED', 'EXPIRED'].includes(cmd.status) ? 'error' : 'info';
+
+  return (
+    <div className="camera-controls">
+      <div className="camera-controls__row">
+        <button className="primary-button compact-button" disabled={!canCapture || working} onClick={capture}
+          title={!canCapture ? 'Camera cần được cấp token và chạy agent' : (!camera.isOnline ? 'Camera đang ngoại tuyến — lệnh chờ tối đa 5 phút' : undefined)}>
+          <Aperture size={13} />{working ? 'Đang chụp…' : 'Chụp ngay'}
+        </button>
+        {!camera.isOnline && canCapture && <small className="muted-text">Camera đang ngoại tuyến, lệnh sẽ chờ tối đa 5 phút.</small>}
+      </div>
+      {cmd && (
+        <div className={`notice notice--${cmdKind}`}>
+          {CMD_LABEL[cmd.status] || cmd.status}{cmd.message && cmd.status !== 'DONE' ? `: ${cmd.message}` : ''}
+        </div>
+      )}
+
+      {canAdmin && camera.lifecycle !== 'DECOMMISSIONED' && (
+        <div className="camera-interval">
+          <label className="camera-interval__label" htmlFor="camera-interval-select">Chu kỳ chụp tự động</label>
+          <div className="camera-controls__row">
+            <select id="camera-interval-select" value={mode === 'custom' ? 'custom' : String(preset)}
+              onChange={(e) => {
+                if (e.target.value === 'custom') setMode('custom');
+                else { setMode('preset'); setPreset(Number(e.target.value)); }
+              }}>
+              {INTERVAL_PRESETS.map((p) => <option key={p.value} value={String(p.value)}>{p.label}</option>)}
+              <option value="custom">Tùy chỉnh…</option>
+            </select>
+            {mode === 'custom' && (
+              <>
+                <input type="number" min="1" className="camera-interval__amount" value={custom.amount}
+                  onChange={(e) => setCustom((c) => ({ ...c, amount: e.target.value }))} />
+                <select className="camera-interval__unit" value={custom.unit} onChange={(e) => setCustom((c) => ({ ...c, unit: e.target.value }))}>
+                  <option value="s">giây</option><option value="m">phút</option><option value="h">giờ</option>
+                </select>
+              </>
+            )}
+            <button className="secondary-button compact-button" disabled={saving || !targetValid || target === currentNum} onClick={saveInterval}>
+              <Save size={13} />{saving ? 'Đang lưu…' : 'Lưu'}
+            </button>
+          </div>
+          {cfgMsg && <div className={`notice notice--${cfgMsg.kind}`}>{cfgMsg.text}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -459,7 +625,7 @@ export default function Cameras() {
             <dl className="camera-facts">
               <dt>Kết nối</dt><dd>{selected.isOnline ? 'Trực tuyến' : 'Ngoại tuyến'} · {ago(selected.lastSeenAt)}</dd>
               <dt>Heartbeat</dt><dd>mỗi {selected.heartbeatIntervalSeconds}s, offline sau {selected.offlineAfterSec}s</dd>
-              <dt>Chu kỳ chụp</dt><dd>{selected.config?.captureIntervalSeconds ? `${selected.config.captureIntervalSeconds}s` : '—'}</dd>
+              <dt>Chu kỳ chụp</dt><dd>{formatInterval(selected.config?.captureIntervalSeconds)}</dd>
               <dt>Vòng đời</dt><dd>{LIFE_LABEL[selected.lifecycle] || selected.lifecycle}{selected.lifecycleChangedAt && ` · ${timestamp(selected.lifecycleChangedAt)}`}</dd>
               <dt>Token</dt><dd>{TOKEN_LABEL[selected.token?.status]}{selected.token?.createdAt && ` · cấp ${timestamp(selected.token.createdAt)}`}{selected.token?.expiresAt && ` · hết hạn ${timestamp(selected.token.expiresAt)}`}</dd>
               <dt>Ảnh gần nhất</dt><dd>{timestamp(selected.lastMediaAt)}</dd>
@@ -469,6 +635,10 @@ export default function Cameras() {
             {selected.lifecycle === 'REGISTERED' && <div className="notice notice--info">Bước tiếp theo: cấp token rồi cấu hình agent trên điện thoại.</div>}
             {selected.lifecycle === 'PROVISIONED' && <div className="notice notice--info">Đã có token, đang chờ điện thoại gửi heartbeat đầu tiên.</div>}
             {['FAULT', 'MAINTENANCE'].includes(selected.lifecycle) && <div className="notice notice--warning">Server đang tạm từ chối ảnh; agent giữ ảnh trong hàng đợi và gửi lại khi kích hoạt lại.</div>}
+
+            <CameraControls camera={selected} canAdmin={canAdmin}
+              onCaptured={() => { setRefreshKey((n) => n + 1); load(); }}
+              onConfigSaved={load} />
 
             {canAdmin && selected.lifecycle !== 'DECOMMISSIONED' && (
               <div className="camera-actions">
