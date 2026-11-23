@@ -1,32 +1,133 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Activity, Image, RefreshCw, X, Leaf, FlaskConical, Upload } from 'lucide-react';
+import { Activity, Image, RefreshCw, X } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import { getSocket } from '../api/socket';
 import * as analysesApi from '../api/analyses.api';
 import '../styles/admin.css';
 
-const timestamp=(value)=>value?new Date(value).toLocaleString('vi-VN'):'—';
-function TreatmentList({ items, title }) { return <section className="treatment-group"><h3>{title}</h3>{!items?.length?<p className="muted-text">Chưa có phương pháp điều trị trong danh mục.</p>:items.map((t)=><article className="treatment-item" key={t.id}><strong>{t.activeIngredient||t.type}</strong>{t.instructions&&<p>{t.instructions}</p>}{t.dosageText&&<small>Liều lượng: {t.dosageText}</small>}{t.intervalDays&&<small>Chu kỳ: {t.intervalDays} ngày</small>}</article>)}</section>; }
-function DirectImagePrediction({onSaved}){
- const [file,setFile]=useState(null);const [result,setResult]=useState(null);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
- const preview=useMemo(()=>file?URL.createObjectURL(file):'', [file]);
- useEffect(()=>()=>{if(preview)URL.revokeObjectURL(preview);},[preview]);
- const submit=async(event)=>{event.preventDefault();if(!file)return;setBusy(true);setError('');setResult(null);try{const response=await analysesApi.predict(file);setResult({...response.data,analysisId:response.analysisId});onSaved();}catch(e){setError(e.message||'Không phân tích được ảnh');}finally{setBusy(false);}};
- return <section className="ai-upload-card"><div className="ai-upload-heading"><div><h2>Phân tích ảnh trực tiếp</h2><p>Chọn ảnh lá JPEG, PNG hoặc WebP (tối đa 10 MB). Ảnh sẽ được gửi qua Backend đến dịch vụ AI.</p></div></div><form className="ai-upload-form" onSubmit={submit}><label htmlFor="ai-image-upload">Ảnh cần phân tích</label><input id="ai-image-upload" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event)=>{setFile(event.target.files?.[0]||null);setResult(null);setError('');}}/><button className="primary-button" type="submit" disabled={!file||busy}>{busy?<><RefreshCw size={14} className="ai-upload-spinner"/>Đang phân tích…</>:<><Upload size={14}/>Gửi ảnh phân tích</>}</button></form>{error&&<div className="notice notice--error">{error}</div>}{result&&<div className="ai-prediction-result"><div className="ai-prediction-main">{preview&&<img src={preview} alt="Ảnh vừa gửi để phân tích"/>}<div><small>KẾT QUẢ DỰ ĐOÁN</small><h3>{result.label_vi}</h3><p>{result.label}</p><strong>{(result.confidence*100).toFixed(1)}% độ tin cậy</strong><span>{result.is_healthy?'Lá khỏe mạnh':'Có dấu hiệu bệnh'}</span></div></div><h4>Các lớp dự đoán</h4><ul>{result.predictions.map((item)=><li key={item.class_id ?? item.label}><span>{item.label_vi}</span><strong>{(item.confidence*100).toFixed(1)}%</strong></li>)}</ul><p className="ai-upload-footnote">{result.analysisId?`Đã lưu vào lịch sử phân tích (mã #${result.analysisId}) cùng ảnh.`:'Kết quả đã được lưu vào lịch sử phân tích cùng ảnh.'}</p></div>}</section>;
-}
-export default function AIAnalyses(){
- const [rows,setRows]=useState([]);const [selected,setSelected]=useState(null);const [detail,setDetail]=useState(null);const [imageUrl,setImageUrl]=useState('');const [loading,setLoading]=useState(true);const [detailLoading,setDetailLoading]=useState(false);const [error,setError]=useState('');const [query,setQuery]=useState('');
- const [searchParams,setSearchParams]=useSearchParams();const deviceId=searchParams.get('deviceId')||'';
- const load=useCallback(async()=>{setLoading(true);try{const r=await analysesApi.list({limit:100,...(deviceId?{deviceId}:{})});setRows(r.data||[]);setError('');}catch(e){setError(e.message||'Không tải được lịch sử AI');}finally{setLoading(false);}},[deviceId]);
- useEffect(()=>{load();},[load]);
- useEffect(()=>{const socket=getSocket();const refresh=()=>load();socket.on('analysis:new',refresh);return()=>socket.off('analysis:new',refresh);},[load]);
- useEffect(()=>{let alive=true;let objectUrl='';setDetail(null);setImageUrl('');if(selected===null)return undefined;setDetailLoading(true);analysesApi.getDetail(selected).then(async(r)=>{if(!alive)return;setDetail(r);if(r.imageUrl){if(r.imageUrl.startsWith('https://')||r.imageUrl.startsWith('http://')){setImageUrl(r.imageUrl);}else{const blob=await analysesApi.getImage(selected);if(alive){objectUrl=URL.createObjectURL(blob);setImageUrl(objectUrl);}}}}).catch(e=>{if(alive)setError(e.message||'Không tải được chi tiết phân tích');}).finally(()=>{if(alive)setDetailLoading(false);});return()=>{alive=false;if(objectUrl)URL.revokeObjectURL(objectUrl);};},[selected]);
- const visible=rows.filter((a)=>`${a.disease?.nameVi||''} ${a.disease?.nameEn||''} ${a.disease?.modelLabel||''}`.toLowerCase().includes(query.toLowerCase()));
- return <div className="entity-page"><PageHeader title="AI Chẩn Đoán" subtitle="Tải ảnh trực tiếp để nhận dự đoán hoặc xem lịch sử phân tích"><button className="secondary-button" onClick={load}><RefreshCw size={14}/> Làm mới</button></PageHeader>
- {error&&<div className="notice notice--error">{error}<button onClick={()=>setError('')}>×</button></div>}
- <DirectImagePrediction onSaved={load}/>
- <div className={`entity-workspace ${detail?'with-side-panel':''}`}><div className="entity-content"><div className="toolbar"><input className="table-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Tìm theo tên bệnh…"/>{deviceId&&<button className="secondary-button compact-button" onClick={()=>setSearchParams({})}>Thiết bị #{deviceId} <X size={12}/></button>}<span className="filter-count">{visible.length} kết quả</span></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Thời gian nhận diện</th><th>Bệnh nhận diện</th><th>Độ tin cậy</th><th>Model</th><th>Ảnh</th></tr></thead><tbody>{visible.map((a)=><tr key={a.id} className={String(selected)===String(a.id)?'selected-row':''} onClick={()=>setSelected(a.id)}><td>{timestamp(a.capturedAt)}</td><td><strong>{a.disease?.nameVi||a.disease?.nameEn||'Chưa xác định'}</strong><small className="table-sub">{a.disease?.nameEn||a.disease?.modelLabel||'—'}</small></td><td><span className={`confidence ${Number(a.confidence)>=0.85?'confidence--high':'confidence--medium'}`}>{(Number(a.confidence)*100).toFixed(1)}%</span></td><td>{a.modelVersion||'—'}</td><td>{(a.imageUrl||a.imagePath)?<span className="inline-label"><Image size={14}/> Có ảnh</span>:<span className="muted-text">Không có ảnh</span>}</td></tr>)}</tbody></table>{loading&&<div className="empty-state">Đang tải kết quả nhận diện…</div>}{!loading&&!visible.length&&<div className="empty-state"><Activity size={24}/>Chưa có lịch sử nhận diện. Kết quả mới sẽ xuất hiện khi Camera gửi ảnh qua HTTP.</div>}</div></div>
- {detail&&<aside className="side-detail ai-detail"><div className="side-detail__heading"><div><h2>{detail.data?.disease?.nameVi||detail.data?.disease?.nameEn||'Chi tiết nhận diện'}</h2><p>{timestamp(detail.data?.capturedAt)}</p></div><button className="icon-button" onClick={()=>setSelected(null)}><X size={16}/></button></div>{detailLoading?<div className="empty-state">Đang tải chi tiết…</div>:<><div className="ai-image-box">{imageUrl?<img src={imageUrl} alt="Ảnh được gửi kèm kết quả nhận diện"/>:<div className="image-placeholder"><Image size={28}/><span>Không có ảnh cho kết quả này</span></div>}</div><div className="analysis-facts"><div><span>Độ tin cậy</span><strong>{(Number(detail.data?.confidence)*100).toFixed(1)}%</strong></div><div><span>Phiên bản model</span><strong>{detail.data?.modelVersion||'—'}</strong></div><div><span>Thời gian xử lý</span><strong>{detail.data?.inferenceMs!=null?`${detail.data.inferenceMs} ms`:'—'}</strong></div><div><span>Sự kiện</span><strong>{detail.data?.eventId||'—'}</strong></div></div><div className="treatments"><TreatmentList title={<><Leaf size={15}/> Điều trị sinh học</>} items={detail.recommendations?.biological}/><TreatmentList title={<><FlaskConical size={15}/> Điều trị hóa học</>} items={detail.recommendations?.chemical}/></div></>}</aside>}</div>
- </div>;
+const timestamp = (value) => value ? new Date(value).toLocaleString('vi-VN') : '—';
+const percent = (value) => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : '—';
+
+export default function AIAnalyses() {
+  const [rows, setRows] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [imageUrl, setImageUrl] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deviceId = searchParams.get('deviceId') || '';
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await analysesApi.list({ limit: 100, ...(deviceId ? { deviceId } : {}) });
+      setRows(response.data || []);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Không tải được lịch sử AI');
+    } finally {
+      setLoading(false);
+    }
+  }, [deviceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const socket = getSocket();
+    const refresh = () => load();
+    socket.on('analysis:new', refresh);
+    return () => socket.off('analysis:new', refresh);
+  }, [load]);
+
+  useEffect(() => {
+    let alive = true;
+    let objectUrl = '';
+    setDetail(null);
+    setImageUrl('');
+    if (selected === null) return undefined;
+    setDetailLoading(true);
+
+    analysesApi.getDetail(selected).then(async (response) => {
+      if (!alive) return;
+      setDetail(response);
+      if (response.imageUrl) {
+        if (/^https?:\/\//i.test(response.imageUrl)) {
+          setImageUrl(response.imageUrl);
+        } else {
+          const blob = await analysesApi.getImage(selected);
+          if (alive) {
+            objectUrl = URL.createObjectURL(blob);
+            setImageUrl(objectUrl);
+          }
+        }
+      }
+    }).catch((err) => {
+      if (alive) setError(err.message || 'Không tải được chi tiết phân tích');
+    }).finally(() => {
+      if (alive) setDetailLoading(false);
+    });
+
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selected]);
+
+  const visible = rows.filter((analysis) =>
+    `${analysis.disease?.nameVi || ''} ${analysis.disease?.nameEn || ''} ${analysis.disease?.modelLabel || ''}`
+      .toLowerCase().includes(query.trim().toLowerCase()));
+  const predictions = Array.isArray(detail?.data?.predictions) ? detail.data.predictions : [];
+
+  return <div className="entity-page">
+    <PageHeader title="AI Chẩn Đoán" subtitle="Lịch sử và kết quả nhận diện bệnh do Camera và dịch vụ AI gửi về">
+      <button className="secondary-button" onClick={load} disabled={loading}><RefreshCw size={14}/> Làm mới</button>
+    </PageHeader>
+    {error && <div className="notice notice--error">{error}<button type="button" onClick={() => setError('')}>×</button></div>}
+
+    <div className={`entity-workspace ${detail ? 'with-side-panel' : ''}`}>
+      <section className="entity-content">
+        <div className="toolbar">
+          <input className="table-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm theo tên bệnh hoặc nhãn AI…"/>
+          {deviceId && <button className="secondary-button compact-button" onClick={() => setSearchParams({})}>Thiết bị #{deviceId} <X size={12}/></button>}
+          <span className="filter-count">{visible.length} kết quả</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Thời gian nhận diện</th><th>Bệnh nhận diện</th><th>Độ tin cậy</th><th>Model</th><th>Ảnh</th></tr></thead>
+            <tbody>
+              {visible.map((analysis) => <tr key={analysis.id} className={String(selected) === String(analysis.id) ? 'selected-row' : ''} onClick={() => setSelected(analysis.id)}>
+                <td>{timestamp(analysis.capturedAt)}</td>
+                <td><strong>{analysis.disease?.nameVi || analysis.disease?.nameEn || 'Chưa xác định'}</strong><small className="table-sub">{analysis.disease?.nameEn || analysis.disease?.modelLabel || '—'}</small></td>
+                <td><span className={`confidence ${Number(analysis.confidence) >= 0.85 ? 'confidence--high' : 'confidence--medium'}`}>{percent(analysis.confidence)}</span></td>
+                <td>{analysis.modelVersion || '—'}</td>
+                <td>{(analysis.imageUrl || analysis.imagePath) ? <span className="inline-label"><Image size={14}/> Có ảnh</span> : <span className="muted-text">Không có ảnh</span>}</td>
+              </tr>)}
+            </tbody>
+          </table>
+          {loading && <div className="empty-state">Đang tải kết quả nhận diện…</div>}
+          {!loading && !visible.length && <div className="empty-state"><Activity size={24}/>Chưa có lịch sử nhận diện. Kết quả mới sẽ xuất hiện khi Camera gửi ảnh qua HTTP.</div>}
+        </div>
+      </section>
+
+      {detail && <aside className="side-detail ai-detail">
+        <div className="side-detail__heading"><div><h2>{detail.data?.disease?.nameVi || detail.data?.disease?.nameEn || 'Chi tiết nhận diện'}</h2><p>{timestamp(detail.data?.capturedAt)}</p></div><button className="icon-button" onClick={() => setSelected(null)} aria-label="Đóng chi tiết"><X size={16}/></button></div>
+        {detailLoading ? <div className="empty-state">Đang tải chi tiết…</div> : <>
+          <div className="ai-image-box">{imageUrl ? <img src={imageUrl} alt="Ảnh được gửi kèm kết quả nhận diện"/> : <div className="image-placeholder"><Image size={28}/><span>Không có ảnh cho kết quả này</span></div>}</div>
+          <div className="analysis-facts">
+            <div><span>Bệnh nhận diện</span><strong>{detail.data?.disease?.nameVi || '—'}</strong></div>
+            <div><span>Độ tin cậy</span><strong>{percent(detail.data?.confidence)}</strong></div>
+            <div><span>Phiên bản model</span><strong>{detail.data?.modelVersion || '—'}</strong></div>
+            <div><span>Thời gian xử lý</span><strong>{detail.data?.inferenceMs != null ? `${detail.data.inferenceMs} ms` : '—'}</strong></div>
+            <div><span>Camera / Thiết bị</span><strong>{detail.data?.device?.name || detail.data?.device?.deviceCode || 'Tải lên ngoài'}</strong></div>
+            <div><span>Mã sự kiện</span><strong>{detail.data?.eventId || '—'}</strong></div>
+          </div>
+          {predictions.length > 0 && <section className="prediction-results"><h3>Các lớp dự đoán</h3><div className="prediction-list">{predictions.map((item, index) => <div className="prediction-row" key={`${item.class_id ?? item.label ?? 'prediction'}-${index}`}><span>{item.label_vi || item.label || `Lớp ${index + 1}`}</span><strong>{percent(item.confidence)}</strong></div>)}</div></section>}
+        </>}
+      </aside>}
+    </div>
+  </div>;
 }

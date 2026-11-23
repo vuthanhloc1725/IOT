@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { Op } = require('sequelize');
-const { Disease, LeafAnalysis, Treatment, Alert } = require('../models');
+const { Disease, LeafAnalysis, Alert } = require('../models');
 const ApiError = require('../utils/apiError');
 const env = require('../config/env');
 const alertService = require('./alert.service');
@@ -10,7 +10,7 @@ const aiPrediction = require('./ai-prediction.service');
 
 exports.fullInclude = [
   { association: 'device', attributes: ['id', 'deviceCode', 'name', 'location'] },
-  { association: 'disease', include: [{ model: Treatment, as: 'treatments' }] },
+  { association: 'disease', attributes: ['id', 'modelLabel', 'nameVi', 'nameEn', 'isHealthy'] },
 ];
 
 async function findDisease(labels, names) {

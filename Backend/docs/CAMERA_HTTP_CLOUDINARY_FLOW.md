@@ -14,7 +14,7 @@
    - Header: `Authorization: Bearer <camera-token>`
 5. Backend kiểm tra token, Camera, metadata, định dạng thật của ảnh, dung lượng; kiểm tra `eventId` để chống gửi trùng.
 6. Backend gửi ảnh sang `AI_API_URL/predict` bằng multipart field `file`, header `X-API-Key`.
-7. Khi AI trả kết quả hợp lệ, Backend upload ảnh lên Cloudinary, sau đó lưu `eventId`, `deviceId`, `capturedAt`, `diseaseId`, `confidence`, `predictions`, `aiResult` (JSON kết quả AI đã chuẩn hóa), `modelVersion`, `inferenceMs`, `imageUrl`, `cloudinaryPublicId`, `imageSha256` vào `leafAnalyses`. Tạo Alert nếu AI phát hiện bệnh và confidence đạt ngưỡng.
+7. Khi AI trả kết quả hợp lệ, Backend upload ảnh lên Cloudinary, sau đó lưu `eventId`, `deviceId`, `capturedAt`, `diseaseId`, `confidence`, `predictions`, `aiResult` (JSON kết quả AI đã chuẩn hóa), `modelVersion`, `inferenceMs`, `imageUrl`, `cloudinaryPublicId`, `imageSha256` vào `leafAnalyses`. Tạo Alert nếu AI phát hiện bệnh và confidence đạt ngưỡng. Lịch sử AI chỉ lưu/hiển thị kết quả nhận diện; phương pháp điều trị được quản lý riêng trong danh mục Disease/Treatment.
 8. Trả `201` với `status: stored`; nếu eventId đã được nhận từ cùng Camera, trả `200` với `status: duplicate`. Agent chỉ xóa bản ảnh local sau khi nhận được một trong hai response thành công.
 
 ## Chế độ fallback (chưa cấu hình AI + Cloudinary)
@@ -53,75 +53,22 @@ Camera là `Device` loại `CAMERA`, không gắn Node ESP32 (`nodeId`/`gpioPin`
 - `GET /api/analyses?deviceId=<id>` vốn đã lọc theo thiết bị được gán.
 - Tạo Camera, cấp/thu hồi token, đổi lifecycle, xoá media: chỉ Admin.
 
-## API
+## API — lịch sử AI chỉ đọc
 
-### Tải ảnh trực tiếp từ giao diện người dùng
+Trang **AI Chẩn Đoán** chỉ hiển thị kết quả đã được lưu từ luồng Camera. Trang này không tải ảnh mới, không tạo kết quả thủ công và không quản lý phương pháp điều trị.
 
-Người dùng đã đăng nhập có thể tải một ảnh lên `POST /api/analyses/predict`. Backend kiểm tra ảnh rồi gửi `multipart/form-data` đến `AI_API_URL/predict` với header `X-API-Key`, sau đó trả JSON dự đoán cho giao diện. Trường `AI_API_URL` là URL gốc của AI server, không thêm `/predict`.
+- `GET /api/analyses`: danh sách kết quả nhận diện theo phạm vi thiết bị người dùng được phép xem.
+- `GET /api/analyses/:id`: chi tiết kết quả, thông tin Disease, Camera/Device và các metadata AI. Response không chứa `recommendations` hoặc danh sách Treatment.
+- `GET /api/analyses/:id/image`: tải ảnh local cũ có JWT; ảnh mới trả URL Cloudinary trong `imageUrl`.
 
-```bash
-curl -X POST "http://localhost:3000/api/analyses/predict" \
-  -H "Authorization: Bearer <user-jwt>" \
-  -F "file=@leaf.jpg;type=image/jpeg"
-```
+Muốn quản lý bệnh và phương pháp điều trị, sử dụng phân hệ riêng:
 
-Ảnh hỗ trợ JPEG/PNG/WebP, tối đa 10 MB. Backend lưu ảnh vào `AI_IMAGE_STORAGE_DIR` (mặc định `Backend/storage/analysis-images`), ghi kết quả vào `leafAnalyses`, và chỉ cho người tải lên xem lịch sử/ảnh đó (Admin xem được tất cả). Ảnh được phục vụ qua API có JWT, không phải thư mục public.
+- `GET /api/diseases`, `GET /api/diseases/:id`: xem danh mục bệnh cùng các phương pháp điều trị thuộc bệnh.
+- `POST/PATCH/DELETE /api/diseases`: CRUD bệnh (Admin).
+- `GET /api/treatments?diseaseId=:id`: lọc phương pháp theo bệnh.
+- `POST/PATCH/DELETE /api/treatments`: CRUD phương pháp điều trị (Admin).
 
-Với database đã tồn tại, chạy `database/migrations/20261117_user_upload_analysis_history.sql` một lần trước khi thử; migration thêm quyền sở hữu lịch sử và ba nhãn AI của model Malabar. Database mới dùng schema và dữ liệu trong `database/smart_agri_mysql_demo.sql`.
-
-#### Kiểm tra luồng tải ảnh
-
-1. Cấu hình `AI_API_URL` bằng URL tunnel AI hiện tại (không kèm `/predict`) và `AI_API_KEY` bằng key cấu hình trên AI server; khởi động lại Backend.
-2. Đăng nhập frontend, mở **AI Chẩn Đoán**, chọn ảnh hợp lệ và bấm **Gửi ảnh phân tích**.
-3. Kết quả xuất hiện trên trang và trong lịch sử; chọn dòng vừa tạo để mở ảnh đã lưu.
-4. Kiểm tra DB bằng `SELECT id, eventId, uploadedBy, diseaseId, imagePath FROM leafAnalyses ORDER BY id DESC LIMIT 5;`.
-
-### Đăng ký Camera
-
-`POST /api/camera` (JWT Admin):
-
-```bash
-curl -X POST "https://<host>/api/camera" \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Camera điện thoại Nhà kính A","location":"Nhà kính A","captureIntervalSeconds":60}'
-```
-
-### Cấp token
-
-`POST /api/camera/tokens/:cameraId`
-
-JWT Admin, ví dụ:
-
-```bash
-curl -X POST "https://<host>/api/camera/tokens/CAM-001" \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"expiresInDays":90,"serverUrl":"https://<host>"}'
-```
-
-`serverUrl` (tuỳ chọn) là địa chỉ điện thoại sẽ gọi tới; bỏ trống thì dùng host của request. Response có `uploadUrl`, `heartbeatUrl` và `agentConfig` (JSON dán thẳng vào `config.json` của agent, cũng là nội dung mã QR trên trang Camera). Cấp token cho Camera `REGISTERED` sẽ chuyển nó sang `PROVISIONED`.
-
-Lưu token ngay; API không có endpoint đọc lại token. Cấp token mới sẽ thay thế token cũ. Thu hồi:
-
-`DELETE /api/camera/tokens/:cameraId` (JWT Admin).
-
-### Gửi ảnh từ Camera
-
-```bash
-curl -X POST "https://<host>/api/camera/media" \
-  -H "Authorization: Bearer <camera-token>" \
-  -F 'metadata={"cameraId":"CAM-001","eventId":"CAM-001-20261115T120000Z-0001","capturedAt":"2026-11-15T19:00:00+07:00"}' \
-  -F "file=@leaf.jpg;type=image/jpeg"
-```
-
-### Xem lịch sử
-
-Các API quản trị hiện có:
-- `GET /api/analyses`
-- `GET /api/analyses/:id`
-
-Ảnh mới trả qua trường `imageUrl` (Cloudinary secure URL). Ảnh cũ có `imagePath` local vẫn được hỗ trợ qua `GET /api/analyses/:id/image`.
+Mỗi Treatment bắt buộc thuộc về một Disease; một Disease có thể có nhiều Treatment.
 
 ## Environment
 
@@ -139,7 +86,6 @@ Không đưa Cloudinary API Secret hoặc Camera token vào Frontend, firmware r
 
 ## Database
 
-- Chạy `database/migrations/20261115_camera_http_cloudinary.sql` trên database cũ.
-- Database mới: chạy `database/smart_agri_mysql_demo.sql`.
-- Sau khi schema sẵn sàng, chạy `npm run seed`.
-- Script seed không gọi `sequelize.sync()`; nó không tự tạo hoặc alter schema.
+- Backend khởi động với `sequelize.sync()` chế độ mặc định chỉ tạo các bảng còn thiếu; chế độ này không tự alter cấu trúc bảng đang tồn tại.
+- Với database hiện hữu, chạy `database/migrations/20261123_disease_treatment_catalog.sql` một lần để chuẩn hóa bảng `treatments` theo mô hình Disease 1-N Treatment. Sao lưu và kiểm tra các Treatment chưa được gắn Disease trước khi migration vì chúng sẽ bị loại khỏi danh mục mới.
+- Sau khi schema sẵn sàng, có thể chạy `npm run seed` để tạo Admin/danh mục demo theo script. Script seed không thay thế migration.

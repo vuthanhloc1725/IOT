@@ -1,72 +1,11 @@
-const crypto = require('node:crypto');
 const { Op } = require('sequelize');
-const { LeafAnalysis, Disease } = require('../models');
+const { LeafAnalysis } = require('../models');
 const ApiError = require('../utils/apiError');
 const { dateRange } = require('../utils/helpers');
 const { paging, meta } = require('../utils/pagination');
 const analysisService = require('../services/analysis.service');
-const aiPrediction = require('../services/ai-prediction.service');
 const imageStorage = require('../services/analysis-image.storage');
 const { accessibleDeviceIds, getDeviceForUser } = require('../services/access.service');
-const socket = require('../services/socket.service');
-const audit = require('../services/audit.service');
-
-exports.predict = async (req, res) => {
-    if (!req.file) throw ApiError.badRequest('Thiếu file trong multipart field "file"');
-    const { actualMime, result } = await aiPrediction.predictImage({
-        buffer: req.file.buffer,
-        originalName: req.file.originalname,
-    });
-
-    const disease = await Disease.findOne({ where: { modelLabel: result.label.trim() } });
-    if (!disease) {
-        throw ApiError.unprocessable(`Nhãn AI "${result.label}" chưa có trong danh mục diseases; hãy chạy migration thêm nhãn Malabar`);
-    }
-    if (Boolean(disease.isHealthy) !== result.is_healthy) {
-        throw ApiError.unprocessable('is_healthy của AI không khớp danh mục diseases');
-    }
-
-    const eventId = crypto.randomUUID();
-    const imageSha256 = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
-    const imagePath = await imageStorage.save(req.file.buffer, actualMime);
-    let created;
-    try {
-        created = await LeafAnalysis.create({
-            eventId,
-            deviceId: null,
-            uploadedBy: req.user.id,
-            capturedAt: new Date(),
-            diseaseId: disease.id,
-            confidence: result.confidence,
-            predictions: result.predictions,
-            aiResult: result,
-            boundingBoxes: null,
-            imagePath,
-            imageUrl: null,
-            cloudinaryPublicId: null,
-            imageSha256,
-            modelVersion: typeof result.model_version === 'string' ? result.model_version.slice(0, 50) : 'external-ai-api',
-            inferenceMs: Number.isFinite(result.inference_ms) ? Math.round(result.inference_ms) : null,
-        });
-    } catch (error) {
-        try {
-            await imageStorage.remove(imagePath);
-        } catch (cleanupError) {
-            console.error('[analysis] image cleanup failed:', cleanupError.message);
-        }
-        throw error;
-    }
-
-    const analysis = await LeafAnalysis.findByPk(created.id, { include: analysisService.fullInclude });
-    socket.emitAuthenticated('analysis:new', analysis);
-    await audit.log(req, {
-        action: 'analysis.user_upload',
-        entityType: 'leafAnalysis',
-        entityId: created.id,
-        detail: { eventId, diseaseId: disease.id, confidence: result.confidence, imageSha256 },
-    });
-    res.status(201).json({ data: result, analysisId: created.id });
-};
 
 // Kết quả AI không gắn thiết bị vẫn được hiển thị cho người dùng đã đăng nhập.
 // Kết quả cũ có deviceId tiếp tục tuân theo phạm vi phân quyền từng thiết bị.
@@ -121,7 +60,7 @@ exports.list = async (req, res) => {
         order: [['capturedAt', 'DESC']],
         include: [
             { association: 'device', attributes: ['id', 'deviceCode', 'name'] },
-            { association: 'disease', attributes: ['id', 'nameVi', 'nameEn', 'isHealthy'] },
+            { association: 'disease', attributes: ['id', 'modelLabel', 'nameVi', 'nameEn', 'isHealthy'] },
         ],
     });
 
@@ -132,7 +71,8 @@ exports.list = async (req, res) => {
     res.json({ data, meta: meta(page, limit, count) });
 };
 
-// Chi tiết kết quả + phác đồ điều trị theo bệnh trong danh mục.
+// Chi tiết chỉ trả về kết quả nhận diện; phương pháp điều trị được quản lý
+// độc lập trong Disease/Treatment, không nhúng vào lịch sử AI.
 exports.get = async (req, res) => {
     const analysis = await LeafAnalysis.findByPk(req.params.id, {
         include: analysisService.fullInclude,
@@ -141,14 +81,9 @@ exports.get = async (req, res) => {
 
     await assertAnalysisAccess(req.user, analysis);
 
-    const treatments = [...(analysis.disease?.treatments || [])];
     res.json({
         data: analysis,
         imageUrl: analysis.imageUrl || (analysis.imagePath ? `/api/analyses/${analysis.id}/image` : null),
-        recommendations: {
-            biological: treatments.filter((treatment) => treatment.type === 'BIOLOGICAL'),
-            chemical: treatments.filter((treatment) => treatment.type === 'CHEMICAL'),
-        },
     });
 };
 

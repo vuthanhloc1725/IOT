@@ -1,6 +1,7 @@
 
-// Không dùng sequelize.sync(): bảng được tạo bằng database/smart_agri_mysql_demo.sql (có kèm seed demo) hoặc scripts/seed-admin.js trên database mới.
-// Biến môi trường (xem .env.example): DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_LOGGING
+// Database được kết nối qua Sequelize. Khi khởi động, server dùng chế độ sync an toàn để tạo bảng còn thiếu;
+// schema của bảng đã tồn tại phải được cập nhật bằng migration trong Backend/database/migrations.
+// Không bật sync force trên database có dữ liệu cần giữ.
 //
 // SƠ ĐỒ QUAN HỆ (1 --< nhiều)
 //   User   1--< AuditLog                  (userId)
@@ -15,7 +16,7 @@
 //   Device 1--< LeafAnalysis              (deviceId tùy chọn; AI bên ngoài có thể không gắn thiết bị)
 //   LeafAnalysis 1--< Alert               (analysisId)
 //   Disease 1--< LeafAnalysis             (diseaseId)
-//   Disease 1--< Treatment                (diseaseId)
+//   Disease 1--< Treatment                (diseaseId; mỗi phương pháp thuộc đúng một bệnh)
 // =====================================================================
 const { Sequelize, DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
@@ -84,13 +85,13 @@ LeafAnalysis.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
 User.hasMany(LeafAnalysis, { foreignKey: 'uploadedBy', as: 'uploadedAnalyses', onDelete: 'SET NULL' });
 LeafAnalysis.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploader' });
 
-// Kết quả AI -> bệnh / thiếu dinh dưỡng
+// Kết quả AI -> bệnh
 Disease.hasMany(LeafAnalysis, { foreignKey: 'diseaseId', as: 'analyses' });
 LeafAnalysis.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
 
-// Phác đồ điều trị: của bệnh hoặc của loại thiếu chất
-Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments' });
-Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
+// Phương pháp điều trị luôn thuộc về một bệnh
+Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments', onDelete: 'RESTRICT' });
+Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease', onDelete: 'RESTRICT' });
 
 // ---------- Quan hệ: camera phone ----------
 // Camera là Device type CAMERA; ảnh lưu đĩa (fallback khi chưa cấu hình AI/Cloudinary) gắn theo deviceCode.

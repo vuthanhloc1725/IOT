@@ -231,132 +231,6 @@ button:disabled {
     flex-wrap: wrap;
 }
 
-.ai-upload-card {
-    margin-bottom: 20px;
-    padding: 18px;
-    border: 1px solid #23324f;
-    border-radius: 9px;
-    background: #10182a;
-}
-
-.ai-upload-heading h2 {
-    margin: 0 0 6px;
-    color: #dce7f7;
-    font-size: 15px;
-}
-
-.ai-upload-heading p,
-.ai-upload-footnote {
-    margin: 0;
-    color: #8da1c4;
-    font-size: 12px;
-}
-
-.ai-upload-form {
-    display: flex;
-    align-items: end;
-    gap: 12px;
-    margin-top: 16px;
-    flex-wrap: wrap;
-}
-
-.ai-upload-form label {
-    display: flex;
-    flex: 1 1 280px;
-    flex-direction: column;
-    gap: 7px;
-    color: #9db0d0;
-    font-size: 12px;
-}
-
-.ai-upload-form input {
-    width: 100%;
-    min-height: 36px;
-    padding: 7px;
-    border: 1px solid #263654;
-    border-radius: 6px;
-    color: #dce7f7;
-    background: #0c1220;
-}
-
-.ai-prediction-result {
-    max-width: 720px;
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid #23324f;
-}
-
-.ai-prediction-main {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.ai-prediction-main img {
-    width: 112px;
-    height: 112px;
-    border: 1px solid #263654;
-    border-radius: 8px;
-    object-fit: cover;
-}
-
-.ai-prediction-main small {
-    color: #8da1c4;
-    font-size: 10px;
-    letter-spacing: .12em;
-}
-
-.ai-prediction-main h3 {
-    margin: 5px 0;
-    color: #e6eefb;
-}
-
-.ai-prediction-main p {
-    margin: 0 0 7px;
-    color: #8da1c4;
-    font-size: 12px;
-}
-
-.ai-prediction-main strong,
-.ai-prediction-main span {
-    display: block;
-    margin-top: 4px;
-}
-
-.ai-prediction-result h4 {
-    margin: 16px 0 8px;
-    color: #a9bad5;
-    font-size: 12px;
-}
-
-.ai-prediction-result ul {
-    margin: 0 0 12px;
-    padding: 0;
-    list-style: none;
-}
-
-.ai-prediction-result li {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 7px 0;
-    border-bottom: 1px solid #1d2b45;
-    color: #a9bad5;
-    font-size: 12px;
-}
-
-.ai-upload-footnote {
-    margin-top: 12px;
-}
-
-.ai-upload-spinner {
-    animation: ai-upload-spin 1s linear infinite;
-}
-
-@keyframes ai-upload-spin {
-    to { transform: rotate(360deg); }
-}
-
 .segmented-control {
     display: inline-flex;
     align-items: center;
@@ -409,6 +283,7 @@ button:disabled {
 .filter-bar select:focus,
 .modal-card input:focus,
 .modal-card select:focus,
+.modal-card textarea:focus,
 .side-detail select:focus,
 .side-detail input:focus {
     border-color: var(--cyan);
@@ -889,6 +764,7 @@ button:disabled {
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .filter-bar input,
 .filter-bar select,
 .side-detail select {
@@ -1110,48 +986,6 @@ button:disabled {
     color: #dde8f8;
     font-size: 11px;
     overflow-wrap: anywhere
-}
-
-.treatments {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    margin-top: 12px
-}
-
-.treatment-group h3 {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin: 0 0 8px;
-    color: #dbe7f8;
-    font-size: 12px
-}
-
-.treatment-item {
-    padding: 10px;
-    border: 1px solid #21314d;
-    border-radius: 5px;
-    margin-top: 6px
-}
-
-.treatment-item strong {
-    color: #25ceff;
-    font-size: 11px
-}
-
-.treatment-item p {
-    margin: 6px 0;
-    color: #9baecc;
-    font-size: 11px;
-    line-height: 1.6
-}
-
-.treatment-item small {
-    display: block;
-    margin-top: 4px;
-    color: #7288ac;
-    font-size: 10px
 }
 
 .devices-api-page .device-filter-tabs {
@@ -1676,3 +1510,49 @@ button:disabled {
 .camera-interval select{min-width:0;flex:1 1 150px}
 .camera-interval select.camera-interval__unit{flex:0 0 76px;width:76px}
 .camera-interval__amount{width:72px;min-height:35px;padding:8px 10px;border:1px solid #283957;border-radius:5px;background:#111b2e;color:#dce7f7;font:inherit;font-size:12px}
+
+/* Disease catalog and one-to-many treatment management */
+.disease-workspace.with-side-panel { grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); }
+.disease-search { display: flex; align-items: center; gap: 8px; min-width: min(100%, 320px); padding: 0 11px; border: 1px solid #263654; border-radius: 6px; background: #10182a; color: #7188ad; }
+.disease-search input { width: 100%; min-width: 0; min-height: 35px; border: 0; outline: 0; color: #dce7f7; background: transparent; font: inherit; font-size: 12px; }
+.disease-table { min-width: 680px; }
+.disease-table tbody tr { cursor: pointer; }
+.disease-table code { color: #91b8d9; font-size: 10px; }
+.disease-kind, .treatment-type { display: inline-flex; align-items: center; padding: 4px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.disease-kind--healthy { color: #2bd99a; background: rgba(43,217,154,.1); }
+.disease-kind--ill { color: #ffc45a; background: rgba(255,196,90,.1); }
+.disease-detail { display: flex; flex-direction: column; gap: 13px; }
+.detail-eyebrow { display: block; margin-bottom: 6px; color: #7188ad; font-family: var(--font-mono); font-size: 9px; letter-spacing: .8px; }
+.disease-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.disease-meta > div { min-width: 0; padding: 10px; border-radius: 6px; background: #131d30; }
+.disease-meta span { display: block; color: #7e93b7; font-size: 10px; }
+.disease-meta strong { display: block; margin-top: 5px; color: #dce7f7; font-size: 11px; overflow-wrap: anywhere; }
+.disease-toolbar { display: flex; flex-wrap: wrap; gap: 7px; padding-bottom: 12px; border-bottom: 1px solid #22314c; }
+.treatment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.treatment-heading > div { display: flex; flex-direction: column; gap: 4px; }
+.treatment-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0; color: #dce7f7; font-size: 13px; }
+.treatment-heading > div > span { color: #7188ad; font-size: 10px; }
+.treatment-card-list { display: flex; flex-direction: column; gap: 9px; }
+.treatment-card { padding: 12px; border: 1px solid #243451; border-radius: 7px; background: #10182a; }
+.treatment-card__top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.treatment-card h4 { margin: 7px 0 0; color: #e0eafa; font-size: 12px; }
+.treatment-type--biological { color: #49dba5; background: rgba(43,217,154,.1); }
+.treatment-type--chemical { color: #ffbd65; background: rgba(255,189,101,.1); }
+.treatment-card > p { margin: 9px 0; color: #9aacc9; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.treatment-detail-line { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 10px; }
+.treatment-detail-line span { color: #7188ad; }
+.treatment-detail-line strong { color: #c6d5eb; text-align: right; }
+.treatment-source { display: block; margin-top: 9px; padding-top: 8px; border-top: 1px solid #202f49; color: #7188ad; font-size: 9px; overflow-wrap: anywhere; }
+.catalog-footnote { margin: 10px 2px 0; color: #7188ad; font-size: 10px; line-height: 1.5; }
+.disease-empty { min-height: 90px; flex-direction: column; gap: 7px; border: 1px dashed #263654; border-radius: 7px; }
+.field-hint { color: #7188ad; font-size: 9px; font-weight: 400; }
+.prediction-results { margin-top: 14px; padding-top: 12px; border-top: 1px solid #243451; }
+.prediction-results h3 { margin: 0 0 8px; color: #dce7f7; font-size: 12px; }
+.prediction-list { display: flex; flex-direction: column; gap: 6px; }
+.prediction-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 9px; border-radius: 5px; background: #131d30; color: #9db0d0; font-size: 10px; }
+.prediction-row strong { color: #27dfa0; font-family: var(--font-mono); }
+@media (max-width: 1100px) {
+  .disease-workspace.with-side-panel { grid-template-columns: minmax(0, 1fr); }
+}
+
+.form-grid textarea { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #283957; border-radius: 5px; outline: none; color: #dce7f7; background: #111b2e; font: inherit; font-size: 12px; resize: vertical; }
