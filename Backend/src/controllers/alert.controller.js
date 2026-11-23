@@ -12,7 +12,6 @@ const fullInclude = [
     ...listInclude,
     { association: 'acknowledger', attributes: ['id', 'username', 'fullName'] },
     { association: 'resolver', attributes: ['id', 'username', 'fullName'] },
-    { association: 'analysis', include: [{ association: 'disease' }] },
 ];
 
 async function loadScoped(req) {
@@ -21,7 +20,7 @@ async function loadScoped(req) {
     if (req.user.role !== 'admin') {
         if (alert.deviceId) {
             await getDeviceForUser(req.user, alert.deviceId);
-        } else if (!(alert.type === 'disease' && alert.analysisId)) {
+        } else {
             throw ApiError.forbidden('Cảnh báo không gắn thiết bị này chỉ dành cho admin');
         }
     }
@@ -33,11 +32,7 @@ exports.list = async (req, res) => {
     const ids = await accessibleDeviceIds(req.user);
     const where = { ...dateRange(req.query, 'createdAt') };
     if (ids !== null) {
-        // Cảnh báo bệnh không gắn deviceId đến từ kết quả AI bên ngoài và khả dụng cho người dùng đăng nhập.
-        where[Op.or] = [
-            { deviceId: { [Op.in]: ids } },
-            { deviceId: null, type: 'disease', analysisId: { [Op.not]: null } },
-        ];
+        where.deviceId = { [Op.in]: ids };
     }
     for (const k of ['status', 'type', 'severity']) if (req.query[k]) where[k] = req.query[k];
     if (req.query.deviceId !== undefined && req.query.deviceId !== '') {

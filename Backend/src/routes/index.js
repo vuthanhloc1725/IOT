@@ -11,6 +11,5 @@ router.use('/analyses', require('./analysis.route'));
 router.use('/camera', require('./camera.route'));
 router.use('/audit-logs', require('./audit.route'));
 router.use('/dashboard', require('./dashboard.route'));
-router.use('/', require('./catalog.route')); // /diseases /treatments
 
 module.exports = router;

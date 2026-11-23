@@ -19,7 +19,6 @@ function scopeAlertWhere(ids) {
     if (ids === null) return {};
     return { [Op.or]: [
         { deviceId: { [Op.in]: ids } },
-        { deviceId: null, type: 'disease', analysisId: { [Op.not]: null } },
     ] };
 }
 
@@ -33,7 +32,7 @@ exports.summary = async (req, res) => {
         Alert.findAll({ attributes: ['severity', [fn('COUNT', col('id')), 'count']], where: { ...alertWhere, status: { [Op.ne]: 'RESOLVED' } }, group: ['severity'], raw: true }),
         LeafAnalysis.findAll({
             where: analysisWhere, limit: 5, order: [['capturedAt', 'DESC']],
-            include: [{ association: 'disease', attributes: ['id', 'nameVi', 'isHealthy'] }, { association: 'device', attributes: ['id', 'name'] }],
+            include: [{ association: 'device', attributes: ['id', 'name'] }],
         }),
     ]);
     const data = {

@@ -5,7 +5,7 @@ module.exports = (sequelize, DataTypes) =>
     {
       id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
       type: {
-        type: DataTypes.ENUM('disease', 'offline', 'fault', 'system', 'sensor_threshold'),
+        type: DataTypes.ENUM('offline', 'fault', 'system', 'sensor_threshold'),
         allowNull: false,
       },
       severity: { type: DataTypes.ENUM('CRITICAL', 'WARNING', 'INFO'), allowNull: false, defaultValue: 'WARNING' },
@@ -25,12 +25,6 @@ module.exports = (sequelize, DataTypes) =>
       tableName: 'alerts',
       timestamps: false,
       validate: {
-        // MySQL không cho CHECK trên cột khóa ngoại ON DELETE SET NULL, nên kiểm tra ở đây
-        diseaseNeedsAnalysis() {
-          if (this.type === 'disease' && !this.analysisId) {
-            throw new Error('Cảnh báo bệnh phải có analysisId');
-          }
-        },
         acknowledgedNeedsUser() {
           if (this.status === 'ACKNOWLEDGED' && (!this.acknowledgedBy || !this.acknowledgedAt)) {
             throw new Error('Cảnh báo đã xác nhận phải có người xác nhận và thời điểm');

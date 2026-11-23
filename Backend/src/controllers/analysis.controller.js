@@ -47,11 +47,7 @@ exports.list = async (req, res) => {
         where.deviceId = requestedDeviceId;
     }
 
-    if (req.query.diseaseId) {
-        const diseaseId = Number(req.query.diseaseId);
-        if (!Number.isInteger(diseaseId) || diseaseId <= 0) throw ApiError.badRequest('diseaseId không hợp lệ');
-        where.diseaseId = diseaseId;
-    }
+
 
     const { rows, count } = await LeafAnalysis.findAndCountAll({
         where,
@@ -60,7 +56,6 @@ exports.list = async (req, res) => {
         order: [['capturedAt', 'DESC']],
         include: [
             { association: 'device', attributes: ['id', 'deviceCode', 'name'] },
-            { association: 'disease', attributes: ['id', 'modelLabel', 'nameVi', 'nameEn', 'isHealthy'] },
         ],
     });
 
@@ -71,8 +66,7 @@ exports.list = async (req, res) => {
     res.json({ data, meta: meta(page, limit, count) });
 };
 
-// Chi tiết chỉ trả về kết quả nhận diện; phương pháp điều trị được quản lý
-// độc lập trong Disease/Treatment, không nhúng vào lịch sử AI.
+// Chi tiết chỉ trả về tên lớp nhận diện và các thông số AI.
 exports.get = async (req, res) => {
     const analysis = await LeafAnalysis.findByPk(req.params.id, {
         include: analysisService.fullInclude,

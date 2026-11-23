@@ -1,4 +1,4 @@
-// Lịch sử nhận diện từ dịch vụ AI bên ngoài. deviceId là tùy chọn vì kết quả không nhất thiết thuộc một thiết bị IoT.
+// Lịch sử nhận diện AI. deviceId là tùy chọn vì kết quả không nhất thiết thuộc một thiết bị IoT.
 // eventId giúp chống lưu trùng khi MQTT QoS 1 gửi lại cùng một bản tin.
 module.exports = (sequelize, DataTypes) =>
   sequelize.define(
@@ -9,7 +9,8 @@ module.exports = (sequelize, DataTypes) =>
       deviceId: { type: DataTypes.INTEGER, allowNull: true },
       uploadedBy: { type: DataTypes.INTEGER, allowNull: true },
       capturedAt: { type: DataTypes.DATE(3), allowNull: false },
-      diseaseId: { type: DataTypes.INTEGER, allowNull: false },
+      diseaseName: { type: DataTypes.STRING(180), allowNull: false },
+      modelLabel: { type: DataTypes.STRING(180), allowNull: true },
       confidence: {
         type: DataTypes.DECIMAL(5, 4),
         allowNull: false,

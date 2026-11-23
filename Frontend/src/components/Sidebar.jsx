@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Wifi, LayoutDashboard, Cpu, Users, Bell, BrainCircuit, ScrollText, Router, LogOut, Camera, Leaf } from 'lucide-react';
+import { Wifi, LayoutDashboard, Cpu, Users, Bell, BrainCircuit, ScrollText, Router, LogOut, Camera } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import './Sidebar.css';
 
@@ -11,7 +11,6 @@ const NAV_ITEMS = [
   { to: '/alerts', label: 'Cảnh Báo', icon: Bell, badge: true },
   { to: '/cameras', label: 'Camera', icon: Camera },
   { to: '/ai', label: 'AI Chẩn Đoán', icon: BrainCircuit },
-  { to: '/diseases', label: 'Danh Mục Bệnh', icon: Leaf },
   { to: '/audit', label: 'Audit Log', icon: ScrollText, admin: true },
 ];
 const ROLE_LABEL = { admin: 'Admin', operator: 'Operator', viewer: 'Viewer' };

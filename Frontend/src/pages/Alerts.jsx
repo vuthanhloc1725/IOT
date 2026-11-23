@@ -7,7 +7,7 @@ import { getSocket } from '../api/socket';
 import '../styles/admin.css';
 const statusText={NEW:'Mới',ACKNOWLEDGED:'Đã xác nhận',RESOLVED:'Đã xử lý'};
 const severityText={CRITICAL:'Nghiêm trọng',WARNING:'Cảnh báo',INFO:'Thông tin'};
-const typeText={disease:'Bệnh cây',offline:'Thiết bị ngoại tuyến',fault:'Thiết bị lỗi',system:'Hệ thống',sensor_threshold:'Vượt ngưỡng cảm biến'};
+const typeText={offline:'Thiết bị ngoại tuyến',fault:'Thiết bị lỗi',system:'Hệ thống',sensor_threshold:'Vượt ngưỡng cảm biến'};
 export default function Alerts(){
  const {user}=useAuth();const [rows,setRows]=useState([]);const [filters,setFilters]=useState({status:'',severity:'',type:''});const [loading,setLoading]=useState(true);const [error,setError]=useState('');const [notice,setNotice]=useState('');
  const load=useCallback(async()=>{setLoading(true);try{const r=await alertsApi.list({...filters,limit:100});setRows(r.data||[]);setError('');}catch(e){setError(e.message||'Không tải được cảnh báo');}finally{setLoading(false);}},[filters]);

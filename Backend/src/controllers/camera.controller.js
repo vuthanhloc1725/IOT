@@ -418,7 +418,6 @@ exports.receiveMedia = async (req, res) => {
         sha256,
         storage: 'ai-cloudinary',
         data: result.analysis,
-        alert: result.alert,
         aiResult: result.aiResult,
         imageUrl: result.analysis?.imageUrl || null,
     });

@@ -29,7 +29,7 @@ module.exports = {
     COMMAND_SOURCES: ['MANUAL', 'AUTO', 'ALERT'],
     COMMAND_STATUS: ['PENDING', 'SENT', 'ACKED', 'FAILED', 'TIMEOUT'],
 
-    ALERT_TYPES: ['disease', 'offline', 'fault', 'system', 'sensor_threshold'],
+    ALERT_TYPES: ['offline', 'fault', 'system', 'sensor_threshold'],
     SEVERITIES: ['CRITICAL', 'WARNING', 'INFO'],
     ALERT_STATUS: ['NEW', 'ACKNOWLEDGED', 'RESOLVED'],
 };

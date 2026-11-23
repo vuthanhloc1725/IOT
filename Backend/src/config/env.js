@@ -72,7 +72,6 @@ const env = {
         imageStorageDir: process.env.CAMERA_IMAGE_STORAGE_DIR || 'storage/camera-media',
     },
     ai: {
-        minConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.5),
         imageMaxBytes: num(process.env.AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
         imageStorageDir: process.env.AI_IMAGE_STORAGE_DIR || 'storage/analysis-images',
         apiUrl: process.env.AI_API_URL || '',
@@ -89,9 +88,6 @@ const env = {
 
 if (env.nodeEnv === 'production' && env.jwt.secret === 'dev-secret-change-me') {
     throw new Error('Phải đặt JWT_SECRET khi chạy production');
-}
-if (!Number.isFinite(env.ai.minConfidence) || env.ai.minConfidence < 0 || env.ai.minConfidence > 1) {
-    throw new Error('AI_MIN_CONFIDENCE phải là số từ 0 đến 1');
 }
 if (!Number.isSafeInteger(env.ai.imageMaxBytes) || env.ai.imageMaxBytes < 1 || env.ai.imageMaxBytes > 50 * 1024 * 1024) {
     throw new Error('AI_IMAGE_MAX_BYTES phải là số nguyên từ 1 đến 52428800');

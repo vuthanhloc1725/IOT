@@ -11,9 +11,8 @@ function validateResult(result) {
       || typeof result.label_vi !== 'string' || !result.label_vi.trim()
       || typeof result.confidence !== 'number' || !Number.isFinite(result.confidence)
       || result.confidence < 0 || result.confidence > 1
-      || typeof result.is_healthy !== 'boolean'
       || !Array.isArray(result.predictions)) {
-    throw new ApiError(502, 'Response AI không đúng schema: cần label, label_vi, confidence, is_healthy, predictions');
+    throw new ApiError(502, 'Response AI không đúng schema: cần label, label_vi, confidence, predictions');
   }
 
   for (const item of result.predictions) {

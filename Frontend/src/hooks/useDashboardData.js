@@ -23,7 +23,7 @@ export default function useDashboardData() {
     if (results[0].status === 'fulfilled') setAlertSummary(summarizeAlerts(results[0].value.data?.openAlertsBySeverity || []));
     if (results[1].status === 'fulfilled') setDevices((results[1].value.data || []).map(toDeviceCard));
     if (results[2].status === 'fulfilled') setEvents((results[2].value.data || []).map(eventFromAlert));
-    if (results[3].status === 'fulfilled') setAiDetections((results[3].value.data || []).filter((a) => a.disease && !a.disease.isHealthy).length);
+    if (results[3].status === 'fulfilled') setAiDetections((results[3].value.data || []).length);
     const failures = results.filter((r) => r.status === 'rejected');
     setError(failures.length === results.length ? (failures[0]?.reason?.message || 'Không tải được dữ liệu dashboard') : '');
   }, []);

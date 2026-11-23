@@ -1,8 +1,8 @@
-// Seed idempotent cho database đã tạo schema bằng database/smart_agri_mysql_demo.sql.
+// Seed idempotent cho database đã tạo schema bằng database/schema.sql.
 // Không gọi sequelize.sync() để tránh tự ý thay đổi cấu trúc hoặc phá dữ liệu production.
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const { sequelize, User, Disease, Device } = require('../src/models');
+const { sequelize, User, Device } = require('../src/models');
 
 async function ensureAdmin() {
   const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin').trim();
@@ -25,22 +25,6 @@ async function ensureAdmin() {
     });
     console.log(`[seed] Đã tạo Admin: ${username}`);
   }
-}
-
-async function ensureCatalog() {
-  const diseases = [
-    ['Tomato___Late_blight', 'Bệnh mốc sương', 'Tomato late blight', false],
-    ['Tomato___Early_blight', 'Bệnh đốm vòng', 'Tomato early blight', false],
-    ['Tomato___healthy', 'Lá cà chua khỏe mạnh', 'Healthy tomato leaf', true],
-    ['Pepper,_bell___Bacterial_spot', 'Bệnh đốm vi khuẩn trên ớt', 'Bacterial spot', false],
-  ];
-  for (const [modelLabel, nameVi, nameEn, isHealthy] of diseases) {
-    await Disease.findOrCreate({
-      where: { modelLabel },
-      defaults: { nameVi, nameEn, isHealthy },
-    });
-  }
-  console.log('[seed] Đã kiểm tra danh mục diseases.');
 }
 
 async function ensureDemoCamera() {
@@ -66,7 +50,6 @@ async function ensureDemoCamera() {
 async function main() {
   await sequelize.authenticate();
   await ensureAdmin();
-  await ensureCatalog();
   await ensureDemoCamera();
   console.log('[seed] Hoàn tất. Script không thay đổi schema database.');
 }

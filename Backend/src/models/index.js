@@ -15,8 +15,7 @@
 //   User   1--< Alert                     (acknowledgedBy, resolvedBy)
 //   Device 1--< LeafAnalysis              (deviceId tùy chọn; AI bên ngoài có thể không gắn thiết bị)
 //   LeafAnalysis 1--< Alert               (analysisId)
-//   Disease 1--< LeafAnalysis             (diseaseId)
-//   Disease 1--< Treatment                (diseaseId; mỗi phương pháp thuộc đúng một bệnh)
+//   LeafAnalysis lưu trực tiếp tên lớp nhận diện và thông số AI, không phụ thuộc danh mục bệnh/điều trị.
 // =====================================================================
 const { Sequelize, DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
@@ -28,8 +27,6 @@ const Node = require('./node.model')(sequelize, DataTypes);
 const Device = require('./device.model')(sequelize, DataTypes);
 const UserDevice = require('./userDevice.model')(sequelize, DataTypes);
 const SensorReading = require('./sensorReading.model')(sequelize, DataTypes);
-const Disease = require('./disease.model')(sequelize, DataTypes);
-const Treatment = require('./treatment.model')(sequelize, DataTypes);
 const LeafAnalysis = require('./leafAnalysis.model')(sequelize, DataTypes);
 const Alert = require('./alert.model')(sequelize, DataTypes);
 const DeviceCommand = require('./deviceCommand.model')(sequelize, DataTypes);
@@ -78,20 +75,12 @@ Alert.belongsTo(User, { foreignKey: 'resolvedBy', as: 'resolver' });
 LeafAnalysis.hasMany(Alert, { foreignKey: 'analysisId', as: 'alerts', onDelete: 'SET NULL' });
 Alert.belongsTo(LeafAnalysis, { foreignKey: 'analysisId', as: 'analysis' });
 
-// ---------- Quan hệ: AI nhận diện bệnh ----------
+// ---------- Quan hệ: kết quả nhận diện AI ----------
 // Kết quả AI có thể gắn thiết bị cũ hoặc deviceId = NULL cho nguồn ngoài không quản lý như IoT device.
 Device.hasMany(LeafAnalysis, { foreignKey: 'deviceId', as: 'analyses', onDelete: 'CASCADE' });
 LeafAnalysis.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
 User.hasMany(LeafAnalysis, { foreignKey: 'uploadedBy', as: 'uploadedAnalyses', onDelete: 'SET NULL' });
 LeafAnalysis.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploader' });
-
-// Kết quả AI -> bệnh
-Disease.hasMany(LeafAnalysis, { foreignKey: 'diseaseId', as: 'analyses' });
-LeafAnalysis.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
-
-// Phương pháp điều trị luôn thuộc về một bệnh
-Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments', onDelete: 'RESTRICT' });
-Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease', onDelete: 'RESTRICT' });
 
 // ---------- Quan hệ: camera phone ----------
 // Camera là Device type CAMERA; ảnh lưu đĩa (fallback khi chưa cấu hình AI/Cloudinary) gắn theo deviceCode.
@@ -114,8 +103,6 @@ module.exports = {
   Device,
   UserDevice,
   SensorReading,
-  Disease,
-  Treatment,
   LeafAnalysis,
   Alert,
   DeviceCommand,

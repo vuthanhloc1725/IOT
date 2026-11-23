@@ -78,12 +78,12 @@ export default function AIAnalyses() {
   }, [selected]);
 
   const visible = rows.filter((analysis) =>
-    `${analysis.disease?.nameVi || ''} ${analysis.disease?.nameEn || ''} ${analysis.disease?.modelLabel || ''}`
+    `${analysis.diseaseName || ''} ${analysis.modelLabel || ''}`
       .toLowerCase().includes(query.trim().toLowerCase()));
   const predictions = Array.isArray(detail?.data?.predictions) ? detail.data.predictions : [];
 
   return <div className="entity-page">
-    <PageHeader title="AI Chẩn Đoán" subtitle="Lịch sử và kết quả nhận diện bệnh do Camera và dịch vụ AI gửi về">
+    <PageHeader title="AI Chẩn Đoán" subtitle="Lịch sử nhận diện và các thông số do mô hình AI trả về">
       <button className="secondary-button" onClick={load} disabled={loading}><RefreshCw size={14}/> Làm mới</button>
     </PageHeader>
     {error && <div className="notice notice--error">{error}<button type="button" onClick={() => setError('')}>×</button></div>}
@@ -91,17 +91,17 @@ export default function AIAnalyses() {
     <div className={`entity-workspace ${detail ? 'with-side-panel' : ''}`}>
       <section className="entity-content">
         <div className="toolbar">
-          <input className="table-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm theo tên bệnh hoặc nhãn AI…"/>
+          <input className="table-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm theo tên nhận diện hoặc nhãn model…"/>
           {deviceId && <button className="secondary-button compact-button" onClick={() => setSearchParams({})}>Thiết bị #{deviceId} <X size={12}/></button>}
           <span className="filter-count">{visible.length} kết quả</span>
         </div>
         <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th>Thời gian nhận diện</th><th>Bệnh nhận diện</th><th>Độ tin cậy</th><th>Model</th><th>Ảnh</th></tr></thead>
+            <thead><tr><th>Thời gian nhận diện</th><th>Tên nhận diện</th><th>Độ tin cậy</th><th>Model</th><th>Ảnh</th></tr></thead>
             <tbody>
               {visible.map((analysis) => <tr key={analysis.id} className={String(selected) === String(analysis.id) ? 'selected-row' : ''} onClick={() => setSelected(analysis.id)}>
                 <td>{timestamp(analysis.capturedAt)}</td>
-                <td><strong>{analysis.disease?.nameVi || analysis.disease?.nameEn || 'Chưa xác định'}</strong><small className="table-sub">{analysis.disease?.nameEn || analysis.disease?.modelLabel || '—'}</small></td>
+                <td><strong>{analysis.diseaseName || 'Chưa xác định'}</strong><small className="table-sub">{analysis.modelLabel || '—'}</small></td>
                 <td><span className={`confidence ${Number(analysis.confidence) >= 0.85 ? 'confidence--high' : 'confidence--medium'}`}>{percent(analysis.confidence)}</span></td>
                 <td>{analysis.modelVersion || '—'}</td>
                 <td>{(analysis.imageUrl || analysis.imagePath) ? <span className="inline-label"><Image size={14}/> Có ảnh</span> : <span className="muted-text">Không có ảnh</span>}</td>
@@ -114,11 +114,11 @@ export default function AIAnalyses() {
       </section>
 
       {detail && <aside className="side-detail ai-detail">
-        <div className="side-detail__heading"><div><h2>{detail.data?.disease?.nameVi || detail.data?.disease?.nameEn || 'Chi tiết nhận diện'}</h2><p>{timestamp(detail.data?.capturedAt)}</p></div><button className="icon-button" onClick={() => setSelected(null)} aria-label="Đóng chi tiết"><X size={16}/></button></div>
+        <div className="side-detail__heading"><div><h2>{detail.data?.diseaseName || 'Chi tiết nhận diện'}</h2><p>{timestamp(detail.data?.capturedAt)}</p></div><button className="icon-button" onClick={() => setSelected(null)} aria-label="Đóng chi tiết"><X size={16}/></button></div>
         {detailLoading ? <div className="empty-state">Đang tải chi tiết…</div> : <>
           <div className="ai-image-box">{imageUrl ? <img src={imageUrl} alt="Ảnh được gửi kèm kết quả nhận diện"/> : <div className="image-placeholder"><Image size={28}/><span>Không có ảnh cho kết quả này</span></div>}</div>
           <div className="analysis-facts">
-            <div><span>Bệnh nhận diện</span><strong>{detail.data?.disease?.nameVi || '—'}</strong></div>
+            <div><span>Tên nhận diện</span><strong>{detail.data?.diseaseName || '—'}</strong></div>
             <div><span>Độ tin cậy</span><strong>{percent(detail.data?.confidence)}</strong></div>
             <div><span>Phiên bản model</span><strong>{detail.data?.modelVersion || '—'}</strong></div>
             <div><span>Thời gian xử lý</span><strong>{detail.data?.inferenceMs != null ? `${detail.data.inferenceMs} ms` : '—'}</strong></div>
