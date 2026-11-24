@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Wifi, LayoutDashboard, Cpu, Users, Bell, BrainCircuit, ScrollText, Router, LogOut } from 'lucide-react';
+import { Wifi, LayoutDashboard, Cpu, Users, Bell, BrainCircuit, ScrollText, Router, LogOut, Camera } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import './Sidebar.css';
 
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/nodes', label: 'Node ESP32', icon: Router, admin: true },
   { to: '/users', label: 'Người Dùng', icon: Users, admin: true },
   { to: '/alerts', label: 'Cảnh Báo', icon: Bell, badge: true },
+  { to: '/cameras', label: 'Camera', icon: Camera },
   { to: '/ai', label: 'AI Chẩn Đoán', icon: BrainCircuit },
   { to: '/audit', label: 'Audit Log', icon: ScrollText, admin: true },
 ];

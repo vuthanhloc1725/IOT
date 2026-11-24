@@ -6,3 +6,7 @@ src/.env
 
 # Ảnh thực tế nhận từ dịch vụ AI (không đưa ảnh runtime vào Git)
 storage/analysis-images/
+storage/camera-media/
+
+# Local MQTT broker keys, credentials, certificate and persistent Dynamic Security state
+/.mqtt/

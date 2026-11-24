@@ -2,7 +2,10 @@ const crypto = require('node:crypto');
 const { CameraToken, Device } = require('../models');
 const ApiError = require('../utils/apiError');
 const asyncHandler = require('../utils/asyncHandler');
+const cameraLifecycle = require('../services/camera-lifecycle.service');
 
+// Xác thực Bearer token Camera. Mỗi request hợp lệ (heartbeat hoặc upload) được tính là
+// "Camera còn sống": cập nhật lastUsedAt, tự ACTIVE ở lần đầu và đóng cảnh báo offline.
 module.exports = asyncHandler(async (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
@@ -16,8 +19,11 @@ module.exports = asyncHandler(async (req, res, next) => {
   if (!device || device.type !== 'CAMERA' || device.lifecycle === 'DECOMMISSIONED') {
     throw ApiError.forbidden('Camera không tồn tại hoặc đã ngừng hoạt động');
   }
+  const wasOnline = cameraLifecycle.presence(device, record).isOnline;
   record.lastUsedAt = new Date();
   await record.save();
+  await cameraLifecycle.onCameraContact(device, record, { wasOnline });
   req.camera = device;
+  req.cameraToken = record;
   next();
 });

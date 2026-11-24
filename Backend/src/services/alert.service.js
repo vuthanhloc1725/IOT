@@ -4,7 +4,6 @@ const socket = require('./socket.service');
 
 function emitAlert(alert, event) {
   if (alert.deviceId) socket.emitDevice(alert.deviceId, event, alert);
-  else if (alert.type === 'disease' && alert.analysisId) socket.emitAuthenticated(event, alert);
   else socket.emitAdmin(event, alert);
 }
 

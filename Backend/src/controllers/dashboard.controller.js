@@ -5,16 +5,20 @@ const ApiError = require('../utils/apiError');
 const { dateRange } = require('../utils/helpers');
 const { accessibleDeviceIds, scopeWhere, getDeviceForUser } = require('../services/access.service');
 
-function scopeAnalysisWhere(ids) {
+function scopeAnalysisWhere(ids, userId) {
     if (ids === null) return {};
-    return { [Op.or]: [{ deviceId: { [Op.in]: ids } }, { deviceId: null }] };
+    return {
+        [Op.or]: [
+            { deviceId: { [Op.in]: ids } },
+            { deviceId: null, [Op.or]: [{ uploadedBy: userId }, { uploadedBy: null }] },
+        ],
+    };
 }
 
 function scopeAlertWhere(ids) {
     if (ids === null) return {};
     return { [Op.or]: [
         { deviceId: { [Op.in]: ids } },
-        { deviceId: null, type: 'disease', analysisId: { [Op.not]: null } },
     ] };
 }
 
@@ -22,13 +26,13 @@ exports.summary = async (req, res) => {
     const ids = await accessibleDeviceIds(req.user);
     const dWhere = scopeWhere(ids, 'id');
     const alertWhere = scopeAlertWhere(ids);
-    const analysisWhere = scopeAnalysisWhere(ids);
+    const analysisWhere = scopeAnalysisWhere(ids, req.user.id);
     const [byLifecycle, alertsBySeverity, latestAnalyses] = await Promise.all([
         Device.findAll({ attributes: ['lifecycle', [fn('COUNT', col('id')), 'count']], where: dWhere, group: ['lifecycle'], raw: true }),
         Alert.findAll({ attributes: ['severity', [fn('COUNT', col('id')), 'count']], where: { ...alertWhere, status: { [Op.ne]: 'RESOLVED' } }, group: ['severity'], raw: true }),
         LeafAnalysis.findAll({
             where: analysisWhere, limit: 5, order: [['capturedAt', 'DESC']],
-            include: [{ association: 'disease', attributes: ['id', 'nameVi', 'isHealthy'] }, { association: 'device', attributes: ['id', 'name'] }],
+            include: [{ association: 'device', attributes: ['id', 'name'] }],
         }),
     ]);
     const data = {

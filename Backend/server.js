@@ -22,10 +22,17 @@ async function syncDatabase() {
 
 async function main() {
     await sequelize.authenticate();
-    console.log(`[db] đã kết nối ${env.db.dialect}`);
+    console.log(`[db] đã kết nối MySQL (${env.db.name})`);
     await syncDatabase();
 
     const server = http.createServer(app);
+    server.on('error', (error) => {
+        const message = error.code === 'EADDRINUSE'
+            ? `Cổng HTTP ${env.port} đang được sử dụng. Dừng phiên backend đang chạy rồi khởi động lại.`
+            : error.message;
+        console.error('[server] không khởi động được:', message);
+        process.exit(1);
+    });
     socketService.init(server);          // Socket.IO dùng chung cổng với Express
     mqttClient.start(async (nodeCode, kind, payload) => {
         return ingest.handle(nodeCode, kind, payload);
@@ -40,6 +47,11 @@ async function main() {
             await nodeService.sweep();
         } catch (e) {
             console.error('[sweep] lỗi:', e.message);
+        }
+        try {
+            await require('./src/services/camera-lifecycle.service').sweepOffline(); // Camera điện thoại quá hạn heartbeat
+        } catch (e) {
+            console.error('[sweep camera] lỗi:', e.message);
         } finally {
             sweeping = false;
         }

@@ -6,3 +6,5 @@ export const update = (id, body) => patch(`/nodes/${id}`, body);
 export const revoke = (id) => post(`/nodes/${id}/revoke`);
 export const restore = (id) => post(`/nodes/${id}/restore`);
 export const issueMqttCredentials = (id) => post(`/nodes/${id}/mqtt-credentials`);
+export const reissueClaimToken = (id, body = {}) => post(`/nodes/${id}/claim-token`, body);
+export const reconcileClaim = (id) => post(`/nodes/${id}/claim-reconcile`, { reason: 'Admin yêu cầu kiểm tra broker để khôi phục claim bị kẹt' });

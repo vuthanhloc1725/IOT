@@ -9,8 +9,14 @@
 #    per_listener_settings false
 #    plugin /usr/lib/x86_64-linux-gnu/mosquitto_dynamic_security.so
 #    plugin_opt_config_file /mosquitto/data/dynamic-security.json
-#    listener 1883
-#    # For production, prefer TLS (8883) and set MQTT_URL=mqtts://... in Backend.
+#    listener 8883
+#    certfile /mosquitto/certs/server.crt
+#    keyfile /mosquitto/certs/server.key
+#    tls_version tlsv1.2
+#    # MAC/token registration and claim require MQTT_URL=mqtts://<broker-host>:8883.
+#    # Private CA: set MQTT_CA_FILE in Backend and provide the same CA to ESP32.
+#    # Local development setup: cd Backend && npm run mqtt:setup
+#    # See docs/LOCAL_MQTT_TLS.md.
 #
 # 2) Create the initial Dynamic Security administrator once (Mosquitto 2.0+):
 #    mosquitto_ctrl dynsec init /mosquitto/data/dynamic-security.json iot_dynsec_admin
@@ -37,6 +43,7 @@
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec setClientPassword agri_backend '<BACKEND_MQTT_PASSWORD>'
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addClientRole agri_backend iot_backend_role 1
 #
+#    Backend receives Node messages:
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/telemetry' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/telemetry/backfill' allow 1
@@ -56,8 +63,9 @@
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive 'sf/+/device/probe/ack' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribePattern 'sf/+/device/probe/ack' allow 1
 #
-#    Backend sends commands/probe requests to Nodes:
+#    Backend sends commands/config/probe requests to Nodes:
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/cmd' allow 1
+#    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/config' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientSend 'sf/+/device/probe' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role publishClientReceive '$CONTROL/dynamic-security/v1/response' allow 1
 #    mosquitto_ctrl -u iot_dynsec_admin -P '<DYNSEC_ADMIN_PASSWORD>' dynsec addRoleACL iot_backend_role subscribeLiteral '$CONTROL/dynamic-security/v1/response' allow 1
@@ -69,13 +77,14 @@
 #    MQTT_DYNSEC_ADMIN_USERNAME=iot_dynsec_admin
 #    MQTT_DYNSEC_ADMIN_PASSWORD=<DYNSEC_ADMIN_PASSWORD>
 #
-# 6) Each new Node created in Web Admin is provisioned dynamically:
+# 6) MAC registration returns a short-lived claim token. Successful claim provisions:
 #    - a distinct username (node_<nodeCode>), random password, and role;
 #    - publish/send ACLs only for sf/<nodeCode>/telemetry, heartbeat, status, config,
 #      ACK and backfill topics;
 #    - subscribe/receive ACLs only for sf/<nodeCode>/cmd, config, device/probe.
-#    The password is returned once in the Node create/rotate API response and shown once
-#    in the Web Admin dialog. It is not stored in MySQL. Save it into the ESP32 captive portal.
+#    Claim returns credentials once to the provisioning tool; rotation returns a new password.
+#    Node creation with a MAC returns no MQTT password. Passwords are not stored in MySQL.
+#    See DEVICE_CLAIM_LIFECYCLE.md for the claim and firmware provisioning flow.
 #
 # 7) Revoking a Node uses Dynamic Security disableClient. Mosquitto disconnects clients
 #    currently connected with that username and denies subsequent connections. Restoring

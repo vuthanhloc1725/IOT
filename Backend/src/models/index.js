@@ -1,6 +1,7 @@
 
-// Không dùng sequelize.sync(): bảng được tạo bằng database/smart_agri_mysql_demo.sql (có kèm seed demo) hoặc scripts/seed-admin.js trên database mới.
-// Biến môi trường (xem .env.example): DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_LOGGING
+// Database được kết nối qua Sequelize. Khi khởi động, server dùng chế độ sync an toàn để tạo bảng còn thiếu;
+// schema của bảng đã tồn tại phải được cập nhật bằng migration trong Backend/database/migrations.
+// Không bật sync force trên database có dữ liệu cần giữ.
 //
 // SƠ ĐỒ QUAN HỆ (1 --< nhiều)
 //   User   1--< AuditLog                  (userId)
@@ -14,8 +15,7 @@
 //   User   1--< Alert                     (acknowledgedBy, resolvedBy)
 //   Device 1--< LeafAnalysis              (deviceId tùy chọn; AI bên ngoài có thể không gắn thiết bị)
 //   LeafAnalysis 1--< Alert               (analysisId)
-//   Disease 1--< LeafAnalysis             (diseaseId)
-//   Disease 1--< Treatment                (diseaseId)
+//   LeafAnalysis lưu trực tiếp tên lớp nhận diện và thông số AI, không phụ thuộc danh mục bệnh/điều trị.
 // =====================================================================
 const { Sequelize, DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
@@ -27,13 +27,11 @@ const Node = require('./node.model')(sequelize, DataTypes);
 const Device = require('./device.model')(sequelize, DataTypes);
 const UserDevice = require('./userDevice.model')(sequelize, DataTypes);
 const SensorReading = require('./sensorReading.model')(sequelize, DataTypes);
-const Disease = require('./disease.model')(sequelize, DataTypes);
-const Treatment = require('./treatment.model')(sequelize, DataTypes);
 const LeafAnalysis = require('./leafAnalysis.model')(sequelize, DataTypes);
 const Alert = require('./alert.model')(sequelize, DataTypes);
 const DeviceCommand = require('./deviceCommand.model')(sequelize, DataTypes);
-const ProvisioningToken = require('./provisioningToken.model')(sequelize, DataTypes);
 const CameraToken = require('./cameraToken.model')(sequelize, DataTypes);
+const CameraMedia = require('./cameraMedia.model')(sequelize, DataTypes);
 
 // ---------- Quan hệ: người dùng ----------
 // Nhật ký thao tác (xóa user thì giữ log, userId = NULL)
@@ -52,8 +50,6 @@ UserDevice.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
 // Một node (ESP32) điều khiển nhiều thiết bị
 Node.hasMany(Device, { foreignKey: 'nodeId', as: 'devices', onDelete: 'RESTRICT' });
 Device.belongsTo(Node, { foreignKey: 'nodeId', as: 'node' });
-Node.hasOne(ProvisioningToken, { foreignKey: 'nodeId', as: 'provisioningToken', onDelete: 'CASCADE' });
-ProvisioningToken.belongsTo(Node, { foreignKey: 'nodeId', as: 'node' });
 Device.hasOne(CameraToken, { foreignKey: 'deviceId', as: 'cameraToken', onDelete: 'CASCADE' });
 CameraToken.belongsTo(Device, { foreignKey: 'deviceId', as: 'camera', onDelete: 'CASCADE' });
 
@@ -79,18 +75,17 @@ Alert.belongsTo(User, { foreignKey: 'resolvedBy', as: 'resolver' });
 LeafAnalysis.hasMany(Alert, { foreignKey: 'analysisId', as: 'alerts', onDelete: 'SET NULL' });
 Alert.belongsTo(LeafAnalysis, { foreignKey: 'analysisId', as: 'analysis' });
 
-// ---------- Quan hệ: AI nhận diện bệnh ----------
+// ---------- Quan hệ: kết quả nhận diện AI ----------
 // Kết quả AI có thể gắn thiết bị cũ hoặc deviceId = NULL cho nguồn ngoài không quản lý như IoT device.
 Device.hasMany(LeafAnalysis, { foreignKey: 'deviceId', as: 'analyses', onDelete: 'CASCADE' });
 LeafAnalysis.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
+User.hasMany(LeafAnalysis, { foreignKey: 'uploadedBy', as: 'uploadedAnalyses', onDelete: 'SET NULL' });
+LeafAnalysis.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploader' });
 
-// Kết quả AI -> bệnh / thiếu dinh dưỡng
-Disease.hasMany(LeafAnalysis, { foreignKey: 'diseaseId', as: 'analyses' });
-LeafAnalysis.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
-
-// Phác đồ điều trị: của bệnh hoặc của loại thiếu chất
-Disease.hasMany(Treatment, { foreignKey: 'diseaseId', as: 'treatments' });
-Treatment.belongsTo(Disease, { foreignKey: 'diseaseId', as: 'disease' });
+// ---------- Quan hệ: camera phone ----------
+// Camera là Device type CAMERA; ảnh lưu đĩa (fallback khi chưa cấu hình AI/Cloudinary) gắn theo deviceCode.
+Device.hasMany(CameraMedia, { foreignKey: 'cameraId', sourceKey: 'deviceCode', as: 'cameraMedia', constraints: false });
+CameraMedia.belongsTo(Device, { foreignKey: 'cameraId', targetKey: 'deviceCode', as: 'camera', constraints: false });
 
 // ---------- Hàm tiện ích ----------
 async function connect() {
@@ -108,11 +103,9 @@ module.exports = {
   Device,
   UserDevice,
   SensorReading,
-  Disease,
-  Treatment,
   LeafAnalysis,
   Alert,
   DeviceCommand,
-  ProvisioningToken,
   CameraToken,
+  CameraMedia,
 };

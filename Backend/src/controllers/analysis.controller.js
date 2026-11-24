@@ -9,21 +9,32 @@ const { accessibleDeviceIds, getDeviceForUser } = require('../services/access.se
 
 // Kết quả AI không gắn thiết bị vẫn được hiển thị cho người dùng đã đăng nhập.
 // Kết quả cũ có deviceId tiếp tục tuân theo phạm vi phân quyền từng thiết bị.
-function analysisScope(ids) {
+function analysisScope(ids, userId) {
     if (ids === null) return {};
     return {
         [Op.or]: [
             { deviceId: { [Op.in]: ids } },
-            { deviceId: null },
+            { deviceId: null, [Op.or]: [{ uploadedBy: userId }, { uploadedBy: null }] },
         ],
     };
+}
+
+async function assertAnalysisAccess(user, analysis) {
+    if (analysis.deviceId) {
+        await getDeviceForUser(user, analysis.deviceId);
+        return;
+    }
+    if (user.role !== 'admin' && analysis.uploadedBy != null
+        && Number(analysis.uploadedBy) !== Number(user.id)) {
+        throw ApiError.notFound('Không tìm thấy kết quả phân tích');
+    }
 }
 
 exports.list = async (req, res) => {
     const { page, limit, offset } = paging(req, 20);
     const deviceIds = await accessibleDeviceIds(req.user);
     const where = {
-        ...analysisScope(deviceIds),
+        ...analysisScope(deviceIds, req.user.id),
         ...dateRange(req.query, 'capturedAt'),
     };
 
@@ -36,11 +47,7 @@ exports.list = async (req, res) => {
         where.deviceId = requestedDeviceId;
     }
 
-    if (req.query.diseaseId) {
-        const diseaseId = Number(req.query.diseaseId);
-        if (!Number.isInteger(diseaseId) || diseaseId <= 0) throw ApiError.badRequest('diseaseId không hợp lệ');
-        where.diseaseId = diseaseId;
-    }
+
 
     const { rows, count } = await LeafAnalysis.findAndCountAll({
         where,
@@ -49,7 +56,6 @@ exports.list = async (req, res) => {
         order: [['capturedAt', 'DESC']],
         include: [
             { association: 'device', attributes: ['id', 'deviceCode', 'name'] },
-            { association: 'disease', attributes: ['id', 'nameVi', 'nameEn', 'isHealthy'] },
         ],
     });
 
@@ -60,33 +66,28 @@ exports.list = async (req, res) => {
     res.json({ data, meta: meta(page, limit, count) });
 };
 
-// Chi tiết kết quả + phác đồ điều trị theo bệnh trong danh mục.
+// Chi tiết chỉ trả về tên lớp nhận diện và các thông số AI.
 exports.get = async (req, res) => {
     const analysis = await LeafAnalysis.findByPk(req.params.id, {
         include: analysisService.fullInclude,
     });
     if (!analysis) throw ApiError.notFound('Không tìm thấy kết quả phân tích');
 
-    if (analysis.deviceId) await getDeviceForUser(req.user, analysis.deviceId);
+    await assertAnalysisAccess(req.user, analysis);
 
-    const treatments = [...(analysis.disease?.treatments || [])];
     res.json({
         data: analysis,
         imageUrl: analysis.imageUrl || (analysis.imagePath ? `/api/analyses/${analysis.id}/image` : null),
-        recommendations: {
-            biological: treatments.filter((treatment) => treatment.type === 'BIOLOGICAL'),
-            chemical: treatments.filter((treatment) => treatment.type === 'CHEMICAL'),
-        },
     });
 };
 
 // Ảnh không được public static: yêu cầu JWT và áp dụng cùng phạm vi quyền của kết quả nhận diện.
 exports.image = async (req, res) => {
     const analysis = await LeafAnalysis.findByPk(req.params.id, {
-        attributes: ['id', 'deviceId', 'imagePath', 'imageUrl'],
+        attributes: ['id', 'deviceId', 'uploadedBy', 'imagePath', 'imageUrl'],
     });
     if (!analysis) throw ApiError.notFound('Không tìm thấy kết quả phân tích');
-    if (analysis.deviceId) await getDeviceForUser(req.user, analysis.deviceId);
+    await assertAnalysisAccess(req.user, analysis);
     if (analysis.imageUrl) return res.redirect(302, analysis.imageUrl);
     if (!analysis.imagePath) throw ApiError.notFound('Kết quả này chưa có ảnh nhận diện');
 

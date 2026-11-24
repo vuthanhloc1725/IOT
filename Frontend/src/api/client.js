@@ -28,12 +28,28 @@ async function handleUnauthorized(status) {
 export async function request(path, { method = 'GET', params, body } = {}) {
   const token = getToken();
   const response = await fetch(makeUrl(path, params), {
+    cache: 'no-store', // dữ liệu IoT thay đổi liên tục; tránh trình duyệt trả 304 từ cache
     method,
     headers: {
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    await handleUnauthorized(response.status);
+    throw new ApiError(response.status, json?.message || json?.error?.message || response.statusText || 'API error', json);
+  }
+  return json;
+}
+
+export async function postForm(path, formData) {
+  const token = getToken();
+  const response = await fetch(makeUrl(path), {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
   });
   const json = await response.json().catch(() => null);
   if (!response.ok) {

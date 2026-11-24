@@ -12,6 +12,7 @@ router.patch('/:id', ctrl.update);
 router.post('/:id/revoke', ctrl.revoke);
 router.post('/:id/restore', ctrl.restore);
 router.post('/:id/mqtt-credentials', ctrl.issueMqttCredentials);
-router.post('/:id/provisioning-token', ctrl.issueProvisioningToken);
+router.post('/:id/claim-token', ctrl.reissueClaimToken);
+router.post('/:id/claim-reconcile', ctrl.reconcileClaim);
 
 module.exports = router;

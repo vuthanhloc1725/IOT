@@ -34,18 +34,6 @@ app.use(
     })
 );
 
-// Provisioning token là bí mật dùng một lần; giới hạn thử claim theo IP.
-app.use(
-    '/api/device-provisioning/claim',
-    rateLimit({
-        windowMs: 15 * 60 * 1000,
-        limit: 10,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: { error: { status: 429, message: 'Thử provisioning quá nhiều lần, vui lòng chờ 15 phút' } },
-    })
-);
-
 // ---- Kiểm tra server còn sống ----
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 

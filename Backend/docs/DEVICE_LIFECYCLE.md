@@ -72,13 +72,13 @@ Firmware v1.2 có thể dùng `commandId` thay `commandUuid`, hoặc `ok` thay `
 
 6. Heartbeat/telemetry tiếp tục chỉ cập nhật kết nối và số đo. Nếu Device đã ở `PROVISIONED`, dữ liệu cảm biến không tự kích hoạt Device.
 
-**Firmware:** đặt `REQUIRE_ACTIVATION = 1` trong `config.h`. Báo cáo Firmware nêu rõ giá trị `0` cho phép tự vào Active ngay khi MQTT kết nối; không dùng chế độ đó cho luồng quản trị này. Lệnh `lc active` trên Serial chỉ dùng test độc lập, không thay cho nút Admin ở môi trường tích hợp.
+**Firmware Arduino:** Sketch `SoilPumpNode.ino` khởi động với activation flags đều false, xóa các flags khi mất MQTT và chỉ kích hoạt sau lifecycle command hợp lệ. Sketch không có `REQUIRE_ACTIVATION` trong `config.h`; tùy chọn đó chỉ thuộc firmware đời khác. Serial Monitor chỉ để giám sát/chẩn đoán, không thay cho nút Admin.
 
 ## 4. Fault, Maintenance và khôi phục
 
 - `ACTIVE` có thể chuyển `FAULT`, `MAINTENANCE` hoặc `DECOMMISSIONED` theo quy tắc lifecycle.
 - Sự kiện lỗi hợp lệ từ Firmware có thể đưa Device vào `FAULT`; Heartbeat bình thường không tự xóa lỗi.
-- Trước khi đưa PUMP/FAN đang bật vào FAULT, MAINTENANCE hoặc DECOMMISSIONED, Backend yêu cầu lệnh OFF và chờ ACK.
+- Với yêu cầu chuyển trạng thái do Admin, trước khi đưa PUMP/FAN đang bật vào FAULT, MAINTENANCE hoặc DECOMMISSIONED, Backend yêu cầu lệnh OFF và chờ ACK. Lỗi do firmware báo có thể ghi FAULT ngay; Backend chỉ cố gắng phát OFF nếu cần, không coi đó là ACK vật lý đã tắt bơm.
 - Sau sửa chữa, Admin chuyển Device về `ACTIVE` bằng nút kích hoạt. Backend gửi lại lệnh `lifecycle ACTIVE`; chỉ ACK thành công mới đưa lifecycle về ACTIVE. Readiness telemetry có thể được ghi nhận cho chẩn đoán, nhưng không kích hoạt tự động.
 - `DECOMMISSIONED` là trạng thái cuối; nếu thay phần cứng vật lý, đăng ký Device mới với `deviceCode` mới.
 
@@ -99,16 +99,20 @@ Khi chỉ thu hồi một Device, Backend đặt `DECOMMISSIONED`, chặn comman
 
 Khi thu hồi Node, Backend gọi Dynamic Security `disableClient` cho username MQTT của Node. Mosquitto sẽ ngắt các phiên hiện đang kết nối bằng username đó và từ chối kết nối mới. Backend đồng thời đặt `isRevoked=true`, `mqttAccountEnabled=false`, đánh dấu Node offline và chặn command/ingest với mọi Device trực thuộc.
 
-Khi khôi phục Node, Backend gọi `enableClient` cho username đã có, bỏ cờ revoked và để `isOnline=false`. ESP32 reconnect bằng username/password cũ; chỉ sau heartbeat mới Node mới được hiển thị online. Nếu cần đổi password vì thất lạc, Admin dùng chức năng Cấp lại tài khoản MQTT; mật khẩu cũ bị vô hiệu và phải cập nhật password mới trong ESP32.
+Khi khôi phục Node, Backend gọi `enableClient` cho username đã có, bỏ cờ revoked và để `isOnline=false`. ESP32 reconnect bằng username/password cũ; một tin MQTT hợp lệ như `status: online` hoặc heartbeat có thể chuyển Node sang online. **Không restore khi nghi mật khẩu đã lộ:** API rotate hiện không cho phép khi Node đang revoked; cần bổ sung quy trình đổi mật khẩu trong khi tài khoản còn bị khóa trước khi mở lại.
 
 ## 6. API và MQTT liên quan
 
 | Hành động | Endpoint / Topic | Kết quả |
 |---|---|---|
-| Tạo Node + tài khoản MQTT | `POST /api/nodes` | Tạo Node, sinh username/password riêng và trả mật khẩu một lần |
+| Tạo Node có MAC (luồng mới) | `POST /api/nodes` | Sinh nodeCode + claim token một lần; chưa có tài khoản MQTT |
+| Tạo Node không có MAC (tương thích cũ) | `POST /api/nodes` | Sinh tài khoản MQTT ngay; không đi qua claim |
+| Claim tại trạm nạp USB | `POST /api/provisioning/claim` | Kiểm tra MAC/token/inventory; tiêu thụ token trước khi tạo MQTT account, trả credential sau khi thành công |
+| Cấp lại claim token | `POST /api/nodes/:id/claim-token` | Chỉ khi token cũ chưa tiêu thụ, hoặc thất bại đã cleanup/đối soát |
+| Đối soát claim bị khóa | `POST /api/nodes/:id/claim-reconcile` | Sau 5 phút, backend tự kiểm tra client và role trên broker; chỉ mở khóa nếu cả hai không tồn tại, không tự xóa tài khoản |
 | Cấp lại mật khẩu Node | `POST /api/nodes/:id/mqtt-credentials` | Vô hiệu mật khẩu cũ, cấp mật khẩu mới |
 | Thu hồi Node | `POST /api/nodes/:id/revoke` | disable MQTT client, ngắt phiên, Node revoked/offline |
-| Khôi phục Node | `POST /api/nodes/:id/restore` | enable MQTT client, chờ heartbeat mới |
+| Khôi phục Node | `POST /api/nodes/:id/restore` | enable MQTT client cũ, chờ MQTT hợp lệ; không dùng nếu nghi lộ credential |
 | Đăng ký Device | `POST /api/devices` | Sinh `deviceCode`, lifecycle `REGISTERED` |
 | Provisioned | `POST /api/devices/:id/lifecycle` body `{"to":"PROVISIONED"}` | Kiểm tra assignment/config/Node, lưu Provisioned và gửi config |
 | Admin kích hoạt | `POST /api/devices/:id/lifecycle` body `{"to":"ACTIVE"}` | Publish lifecycle command, đợi Firmware ACK |
@@ -118,10 +122,10 @@ Khi khôi phục Node, Backend gọi `enableClient` cho username đã có, bỏ 
 
 - Bật Mosquitto Dynamic Security plugin và khởi tạo tài khoản quản trị theo `Backend/docs/mosquitto-acl.example`.
 - Backend `.env` phải có `MQTT_DYNSEC_ENABLED=true`, `MQTT_DYNSEC_ADMIN_USERNAME`, `MQTT_DYNSEC_ADMIN_PASSWORD`, cùng `MQTT_USERNAME`/`MQTT_PASSWORD` riêng của Backend. Không dùng tài khoản Node cho Backend.
-- Firmware cần được nạp với `REQUIRE_ACTIVATION = 1` và phải echo UUID của lifecycle command trong `cmd/ack`.
-- Database đã cài từ phiên bản cũ: backup rồi chạy `Backend/database/migrations/20261102_node_mqtt_accounts_explicit_activation.sql` đúng một lần. Database mới phải dùng `Backend/database/smart_agri_mysql_demo.sql` đã cập nhật.
+- Firmware Arduino hiện dùng `firmware/arduino/SoilPumpNode/SoilPumpNode.ino` và `device_config.h` tạo riêng tại trạm nạp; firmware phải echo UUID của lifecycle command trong `cmd/ack`.
+- Database đã cài từ phiên bản cũ: backup rồi chạy lần lượt `Backend/database/migrations/20261102_node_mqtt_accounts_explicit_activation.sql` và `Backend/database/migrations/20261103_node_claim_identity.sql` đúng một lần. Database mới phải dùng `Backend/database/smart_agri_mysql_demo.sql` đã cập nhật.
 - Các tài khoản MQTT đã có trong DB cũ chưa tự động được tạo trên Broker; sau khi bật Dynamic Security, Admin cần vào Quản lý Node và dùng thao tác tạo/cấp lại thông tin MQTT cho từng Node trước khi Provisioned.
 
 ## 8. Giới hạn tích hợp
 
-Các key JSON chi tiết của config/lifecycle ACK vẫn cần đối chiếu parser Firmware thực tế. Backend gửi command theo mẫu trên và hỗ trợ UUID aliases `commandUuid`/`commandId`, success aliases `success`/`ok`; cần xác nhận Firmware v1.2 echo đúng các trường đó trên thiết bị thật. Gói này không bao gồm source ESP32 và chưa thể xác minh kết nối broker/hardware end-to-end trong môi trường đóng gói.
+Sketch Arduino đã có source và test tĩnh/mock cho contract MQTT, nhưng chưa compile/nạp trên board thật hay kiểm chứng MySQL/Mosquitto/ESP32 end-to-end. Claim token không chứng minh MAC không thể giả mạo hoặc firmware trên bo là bản được cấp. Broker Dynamic Security trả lời đến muộn, race claim/revoke và thao tác reconcile thủ công vẫn cần kiểm thử/tăng cứng trước khi dùng trong môi trường không giám sát. Xem `Backend/docs/DEVICE_CLAIM_LIFECYCLE.md` để biết đầy đủ thứ tự và đường phục hồi claim.

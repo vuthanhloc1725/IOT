@@ -1,4 +1,4 @@
-// Lịch sử nhận diện từ dịch vụ AI bên ngoài. deviceId là tùy chọn vì kết quả không nhất thiết thuộc một thiết bị IoT.
+// Lịch sử nhận diện AI. deviceId là tùy chọn vì kết quả không nhất thiết thuộc một thiết bị IoT.
 // eventId giúp chống lưu trùng khi MQTT QoS 1 gửi lại cùng một bản tin.
 module.exports = (sequelize, DataTypes) =>
   sequelize.define(
@@ -7,8 +7,10 @@ module.exports = (sequelize, DataTypes) =>
       id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
       eventId: { type: DataTypes.STRING(100), allowNull: true },
       deviceId: { type: DataTypes.INTEGER, allowNull: true },
+      uploadedBy: { type: DataTypes.INTEGER, allowNull: true },
       capturedAt: { type: DataTypes.DATE(3), allowNull: false },
-      diseaseId: { type: DataTypes.INTEGER, allowNull: false },
+      diseaseName: { type: DataTypes.STRING(180), allowNull: false },
+      modelLabel: { type: DataTypes.STRING(180), allowNull: true },
       confidence: {
         type: DataTypes.DECIMAL(5, 4),
         allowNull: false,
@@ -22,8 +24,8 @@ module.exports = (sequelize, DataTypes) =>
       // Xác suất của toàn bộ lớp AI (label, label_vi, confidence, class_id).
       predictions: { type: DataTypes.JSON, allowNull: true },
       aiResult: { type: DataTypes.JSON, allowNull: true },
-      // Chỉ lưu tên file ngẫu nhiên, không nhận đường dẫn tùy ý từ bản tin MQTT.
-      imagePath: { type: DataTypes.STRING(500), allowNull: true }, // legacy local file; giữ để đọc dữ liệu cũ
+      // Chỉ lưu tên file ngẫu nhiên do Backend tạo, không nhận đường dẫn từ request.
+      imagePath: { type: DataTypes.STRING(500), allowNull: true },
       imageUrl: { type: DataTypes.STRING(1000), allowNull: true },
       cloudinaryPublicId: { type: DataTypes.STRING(255), allowNull: true },
       imageSha256: { type: DataTypes.CHAR(64), allowNull: true },
@@ -34,6 +36,9 @@ module.exports = (sequelize, DataTypes) =>
     {
       tableName: 'leafAnalyses',
       timestamps: false,
-      indexes: [{ unique: true, fields: ['eventId'], name: 'leafAnalyses_eventId_unique' }],
+      indexes: [
+        { unique: true, fields: ['eventId'], name: 'leafAnalyses_eventId_unique' },
+        { fields: ['uploadedBy'], name: 'idx_leafAnalyses_uploadedBy' },
+      ],
     }
   );

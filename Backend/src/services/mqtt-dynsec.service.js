@@ -1,5 +1,7 @@
 const mqtt = require('mqtt');
+const { randomUUID } = require('crypto');
 const env = require('../config/env');
+const mqttTlsOptions = require('../config/mqtt-tls');
 
 const CONTROL_TOPIC = '$CONTROL/dynamic-security/v1';
 const RESPONSE_TOPIC = `${CONTROL_TOPIC}/response`;
@@ -35,7 +37,7 @@ async function ensureConnected() {
             keepalive: 30,
             reconnectPeriod: 0,
             connectTimeout: 10000,
-            rejectUnauthorized: true,
+            ...mqttTlsOptions(env.mqtt.caFile),
         });
         client = current;
         let settled = false;
@@ -43,14 +45,18 @@ async function ensureConnected() {
             if (settled) return;
             settled = true;
             connecting = null;
+            clearTimeout(timeout);
             current.end(true);
             if (client === current) client = null;
             reject(error);
         };
         const timeout = setTimeout(() => fail(new Error('Timeout kết nối MQTT Dynamic Security')), 12000);
         current.once('connect', () => {
-            current.subscribe(RESPONSE_TOPIC, { qos: 1 }, (error) => {
+            current.subscribe(RESPONSE_TOPIC, { qos: 1 }, (error, granted) => {
                 if (error) return fail(error);
+                if (!granted?.some((entry) => entry.topic === RESPONSE_TOPIC && [0, 1, 2].includes(entry.qos))) {
+                    return fail(new Error('Broker không cấp quyền subscribe topic phản hồi Dynamic Security; kiểm tra ACL tài khoản quản trị'));
+                }
                 if (settled) return;
                 settled = true;
                 clearTimeout(timeout);
@@ -71,12 +77,17 @@ async function ensureConnected() {
         });
         current.on('message', (topic, buffer) => {
             if (topic !== RESPONSE_TOPIC || !pendingResponse) return;
+            pendingResponse.received += 1;
             let response;
             try { response = JSON.parse(buffer.toString('utf8')); }
-            catch { pendingResponse.reject(new Error('Phản hồi Dynamic Security không phải JSON hợp lệ')); pendingResponse = null; return; }
+            catch { pendingResponse.malformed += 1; return; }
+            const result = Array.isArray(response?.responses) && response.responses.find((entry) =>
+                entry?.command === pendingResponse.command && entry.correlationData === pendingResponse.correlationData);
+            // Shared response topic: ignore another administrator's reply and late replies.
+            if (!result) { pendingResponse.unmatched += 1; return; }
             const waiter = pendingResponse;
             pendingResponse = null;
-            waiter.resolve(response);
+            waiter.resolve(result);
         });
     });
     return connecting;
@@ -85,26 +96,32 @@ async function ensureConnected() {
 async function executeOne(command) {
     const connection = await ensureConnected();
     if (pendingResponse) throw new Error('Dynamic Security đang có một yêu cầu chưa hoàn tất');
-    const response = await new Promise((resolve, reject) => {
+    const correlationData = randomUUID();
+    const result = await new Promise((resolve, reject) => {
         let waiter;
         const timer = setTimeout(() => {
             if (pendingResponse === waiter) pendingResponse = null;
-            reject(new Error(`Dynamic Security không phản hồi lệnh ${command.command}`));
+            const hint = waiter.received === 0
+                ? 'MQTT đã kết nối nhưng không nhận tin trên topic phản hồi; kiểm tra broker có nạp plugin Dynamic Security và ACL publish/receive của admin'
+                : `đã nhận ${waiter.received} tin, ${waiter.unmatched} tin không khớp command/correlationData, ${waiter.malformed} tin không phải JSON; kiểm tra phiên bản plugin và định dạng phản hồi`;
+            reject(new Error(`Dynamic Security không phản hồi lệnh ${command.command}: ${hint}`));
         }, Math.max(1000, env.mqtt.dynsecRequestTimeoutMs));
         const finishResolve = (value) => { clearTimeout(timer); resolve(value); };
         const finishReject = (error) => { clearTimeout(timer); reject(error); };
-        waiter = { resolve: finishResolve, reject: finishReject };
+        waiter = { resolve: finishResolve, reject: finishReject, command: command.command, correlationData, received: 0, unmatched: 0, malformed: 0 };
         pendingResponse = waiter;
-        connection.publish(CONTROL_TOPIC, JSON.stringify({ commands: [command] }), { qos: 1, retain: false }, (error) => {
+        connection.publish(CONTROL_TOPIC, JSON.stringify({ commands: [{ ...command, correlationData }] }), { qos: 1, retain: false }, (error) => {
             if (error && pendingResponse === waiter) {
                 pendingResponse = null;
                 finishReject(error);
             }
         });
     });
-    const result = Array.isArray(response?.responses) ? response.responses[0] : null;
-    if (!result) throw new Error(`Dynamic Security trả về phản hồi không hợp lệ cho ${command.command}`);
-    if (result.error) throw new Error(`Mosquitto ${command.command}: ${result.error}`);
+    if (result.error) {
+        const error = new Error(`Mosquitto ${command.command}: ${result.error}`);
+        error.brokerError = result.error;
+        throw error;
+    }
     return result;
 }
 
@@ -149,19 +166,32 @@ async function createAccount({ nodeCode, username, password }) {
     return { roleName };
 }
 
+async function objectExists(command, missingError) {
+    try { await execute(command); return true; }
+    catch (error) {
+        if (error.brokerError === missingError) return false;
+        throw error;
+    }
+}
+
+// Only an authenticated, correlated explicit not-found response proves absence.
+exports.inspectAccount = async (username, roleName) => ({
+    clientExists: await objectExists({ command: 'getClient', username }, 'Client not found'),
+    roleExists: await objectExists({ command: 'getRole', rolename: roleName }, 'Role not found'),
+});
+
 exports.isEnabled = () => Boolean(env.mqtt.dynsecEnabled && env.mqtt.dynsecAdminUsername && env.mqtt.dynsecAdminPassword);
 exports.assertConfigured = assertConfigured;
 exports.createAccount = createAccount;
 exports.disableAccount = (username) => execute({ command: 'disableClient', username });
-exports.deleteAccount = async (username, roleName) => {
-    if (username) {
-        try { await execute({ command: 'deleteClient', username }); } catch { /* continue cleanup */ }
-    }
-    if (roleName) {
-        try { await execute({ command: 'deleteRole', rolename: roleName }); } catch { /* continue cleanup */ }
-    }
-};
 exports.enableAccount = (username) => execute({ command: 'enableClient', username });
+exports.deleteAccount = async (username, roleName) => {
+    // A failed claim may have created either object before the DB transaction rolled back.
+    const errors = [];
+    try { await execute({ command: 'deleteClient', username }); } catch (error) { if (error.brokerError !== 'Client not found') errors.push(error); }
+    try { await execute({ command: 'deleteRole', rolename: roleName }); } catch (error) { if (error.brokerError !== 'Role not found') errors.push(error); }
+    if (errors.length) throw errors[0];
+};
 exports.rotatePassword = async (username, password) => {
     await execute({ command: 'disableClient', username });
     try {

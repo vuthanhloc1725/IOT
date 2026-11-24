@@ -1,5 +1,6 @@
 const mqtt = require('mqtt');
 const env = require('../config/env');
+const mqttTlsOptions = require('../config/mqtt-tls');
 
 const P = env.mqtt.firmwarePrefix;
 let client = null;
@@ -32,7 +33,7 @@ exports.start = (onMessage, onConnected = null) => {
         reconnectPeriod: 3000,
         clean: true,
         // When MQTT_URL uses mqtts://, do not accept an untrusted broker certificate.
-        rejectUnauthorized: true,
+        ...mqttTlsOptions(env.mqtt.caFile),
     });
 
     client.on('connect', () => {

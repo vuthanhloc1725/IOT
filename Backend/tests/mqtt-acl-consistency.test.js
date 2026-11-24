@@ -8,7 +8,9 @@ const exampleEnv = fs.readFileSync(path.join(backendRoot, '.env.example'), 'utf8
 const dynsecDocs = fs.readFileSync(path.join(backendRoot, 'docs/mosquitto-acl.example'), 'utf8');
 const mqttClient = fs.readFileSync(path.join(backendRoot, 'src/services/mqtt.client.js'), 'utf8');
 const dynsecService = fs.readFileSync(path.join(backendRoot, 'src/services/mqtt-dynsec.service.js'), 'utf8');
-const nodeController = fs.readFileSync(path.join(backendRoot, 'src/controllers/node.controller.js'), 'utf8');
+// Vòng đời tài khoản Broker của Node nằm ở controller + node-provisioning.service.
+const nodeController = ['src/controllers/node.controller.js', 'src/services/node-provisioning.service.js']
+  .map((file) => fs.readFileSync(path.join(backendRoot, file), 'utf8')).join('\n');
 
 test('Firmware MQTT prefix and per-Node Dynamic Security configuration are consistent', () => {
   assert.match(exampleEnv, /^MQTT_TOPIC_PREFIX=iot$/m);

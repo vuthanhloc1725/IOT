@@ -1,0 +1,50 @@
+{
+  "camera_id": "CAM-001",
+  "heartbeat_interval_seconds": 60,
+  "upload": {
+    "url": "https://api.example.org/api/camera/media",
+    "heartbeat_url": "https://api.example.org/api/camera/heartbeat",
+    "http_heartbeat": true,
+    "http_commands": true,
+    "token": "REPLACE_WITH_DEVICE_TOKEN",
+    "ca_file": "",
+    "allow_insecure_http": false,
+    "timeout_seconds": 60,
+    "max_media_bytes": 10485760,
+    "retry_min_seconds": 5,
+    "retry_max_seconds": 300
+  },
+  "mqtt": {
+    "enabled": false,
+    "host": "broker.example.org",
+    "port": 8883,
+    "keepalive_seconds": 45,
+    "topic_prefix": "camera",
+    "username": "phone_cam_01",
+    "password": "REPLACE_WITH_MQTT_PASSWORD",
+    "tls": {
+      "enabled": true,
+      "ca_file": ""
+    }
+  },
+  "capture": {
+    "camera": "back",
+    "interval_seconds": 900,
+    "capture_timeout_seconds": 30,
+    "resize_max_width": 1920,
+    "jpeg_quality": 4
+  },
+  "video": {
+    "mode": "timelapse",
+    "default_duration_seconds": 10,
+    "max_duration_seconds": 30,
+    "frame_interval_seconds": 1,
+    "output_fps": 2,
+    "max_width": 1280
+  },
+  "storage": {
+    "directory": "/data/data/com.termux/files/home/phone-camera/spool",
+    "media_directory": "/data/data/com.termux/files/home/phone-camera/captures",
+    "max_queue_items": 500
+  }
+}

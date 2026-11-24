@@ -47,8 +47,9 @@ const env = {
     mqtt: {
         enabled: bool(process.env.MQTT_ENABLED, true),
         url: process.env.MQTT_URL || 'mqtt://localhost:1883',
-        // Địa chỉ Broker ESP32 truy cập qua LAN; không dùng localhost cho Firmware.
+        // URL mà ESP32 dùng để kết nối Broker (Backend có thể dùng localhost, thiết bị thì không).
         deviceUrl: process.env.MQTT_DEVICE_URL || '',
+        caFile: process.env.MQTT_CA_FILE || '',
         username: process.env.MQTT_USERNAME || '',
         password: process.env.MQTT_PASSWORD || '',
         prefix: process.env.MQTT_TOPIC_PREFIX || 'iot',
@@ -61,9 +62,16 @@ const env = {
     heartbeatSweepSec: num(process.env.HEARTBEAT_SWEEP_SEC, 10),
     commandAckTimeoutSec: num(process.env.COMMAND_ACK_TIMEOUT_SEC, 15),
     deviceProbeTimeoutSec: num(process.env.DEVICE_PROBE_TIMEOUT_SEC, 8),
+    // Bắt buộc HTTPS cho claim/cấp token và mqtts:// cho thiết bị. Mặc định chỉ bật ở production;
+    // khi phát triển trong LAN có thể để false để ESP32 claim qua http:// và MQTT 1883.
+    claimRequireTls: bool(process.env.CLAIM_REQUIRE_TLS, (process.env.NODE_ENV || 'development') === 'production'),
+    claimTrustedProxyIps: (process.env.CLAIM_TRUSTED_PROXY_IPS || '').split(',').map((s) => s.trim()).filter(Boolean),
     sensorThresholdRules: parseSensorThresholdRules(process.env.SENSOR_THRESHOLD_RULES_JSON),
+    camera: {
+        imageMaxBytes: num(process.env.CAMERA_IMAGE_MAX_BYTES, 10 * 1024 * 1024),
+        imageStorageDir: process.env.CAMERA_IMAGE_STORAGE_DIR || 'storage/camera-media',
+    },
     ai: {
-        minConfidence: num(process.env.AI_MIN_CONFIDENCE, 0.5),
         imageMaxBytes: num(process.env.AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
         imageStorageDir: process.env.AI_IMAGE_STORAGE_DIR || 'storage/analysis-images',
         apiUrl: process.env.AI_API_URL || '',
@@ -80,9 +88,6 @@ const env = {
 
 if (env.nodeEnv === 'production' && env.jwt.secret === 'dev-secret-change-me') {
     throw new Error('Phải đặt JWT_SECRET khi chạy production');
-}
-if (!Number.isFinite(env.ai.minConfidence) || env.ai.minConfidence < 0 || env.ai.minConfidence > 1) {
-    throw new Error('AI_MIN_CONFIDENCE phải là số từ 0 đến 1');
 }
 if (!Number.isSafeInteger(env.ai.imageMaxBytes) || env.ai.imageMaxBytes < 1 || env.ai.imageMaxBytes > 50 * 1024 * 1024) {
     throw new Error('AI_IMAGE_MAX_BYTES phải là số nguyên từ 1 đến 52428800');
