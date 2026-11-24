@@ -102,8 +102,8 @@ Backend healthcheck nội bộ: `http://backend:3000/health` trong Docker networ
 
 | Vai trò | Username | Password demo |
 |---|---|---|
-| Admin | `admin` | `Admin@IoT-SmartAgri-2026-Local!` |
-| Operator | `operator` | `Operator@IoT-SmartAgri-2026-Local!` |
+| Admin | `admin` | `demo@12345678` |
+| Operator | `  ` | `Operator@IoT-SmartAgri-2026-Local!` |
 | Viewer | `viewer` | `Viewer@IoT-SmartAgri-2026-Local!` |
 
 Password trong SQL chỉ được lưu dưới dạng BCrypt hash. Đây là tài khoản demo công khai, phải đổi password ngay sau khi đăng nhập và trước khi dùng ngoài môi trường thử nghiệm.

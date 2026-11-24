@@ -15,7 +15,7 @@ START TRANSACTION;
 INSERT IGNORE INTO `users`
   (`username`, `email`, `passwordHash`, `fullName`, `role`, `isActive`, `createdAt`)
 VALUES
-  ('admin', 'admin@iot.local', '$2b$12$08ccDKkYe6ImheKRpaCJSO7JVJ.caSgGvQIJpHwoWzkCl84voG16m', 'System Administrator', 'admin', 1, CURRENT_TIMESTAMP(3)),
+  ('admin', 'admin@iot.local', '$2a$12$W0anQLpF.HT4g2Y6rwAQluAQ1XxKtC18u0F2IifQsh3XieihXOh/S', 'System Administrator', 'admin', 1, CURRENT_TIMESTAMP(3)),
   ('operator', 'operator@iot.local', '$2b$12$I4xYMtYYFut5DyAryaLmTei/jyfz3wIzykCy/sJwhrdayIrTNTwkG', 'Demo Operator', 'operator', 1, CURRENT_TIMESTAMP(3)),
   ('viewer', 'viewer@iot.local', '$2b$12$9EAJmuujPxvcZWrBOmnWXu82n3JpfxKO8/MErQwu23u8LClXv/7.6', 'Demo Viewer', 'viewer', 1, CURRENT_TIMESTAMP(3));
 

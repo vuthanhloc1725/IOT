@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `role` ENUM('admin','operator','viewer') NOT NULL DEFAULT 'viewer',
   `isActive` TINYINT(1) NOT NULL DEFAULT 1,
   `lastLoginAt` DATETIME(3) NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_username_unique` (`username`),
   UNIQUE KEY `users_email_unique` (`email`)
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
   `claimFailedAt` DATETIME(3) NULL,
   `claimedAt` DATETIME(3) NULL,
   `revokedAt` DATETIME(3) NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `nodes_nodeCode_unique` (`nodeCode`),
   UNIQUE KEY `nodes_mqttUsername_unique` (`mqttUsername`),
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS `devices` (
   `config` JSON NOT NULL DEFAULT (JSON_OBJECT()),
   `configVersion` INT NOT NULL DEFAULT 0,
   `configAppliedVersion` INT NOT NULL DEFAULT 0,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `devices_deviceCode_unique` (`deviceCode`),
   UNIQUE KEY `devices_pendingLifecycleCommandUuid_unique` (`pendingLifecycleCommandUuid`),
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS `devices` (
 CREATE TABLE IF NOT EXISTS `userDevices` (
   `userId` INT NOT NULL,
   `deviceId` INT NOT NULL,
-  `assignedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `assignedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`userId`, `deviceId`),
   KEY `idx_userDevices_deviceId` (`deviceId`),
   CONSTRAINT `fk_userDevices_userId`
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS `sensorReadings` (
   `sourceBootCount` INT NULL,
   `sourceSeq` BIGINT NULL,
   `isBackfilled` TINYINT(1) NOT NULL DEFAULT 0,
-  `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`deviceId`, `metric`, `recordedAt`),
   KEY `idx_sensorReadings_recordedAt` (`recordedAt`),
   CONSTRAINT `fk_sensorReadings_deviceId`
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS `alerts` (
   `message` TEXT NULL,
   `deviceId` INT NULL,
   `analysisId` INT NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `acknowledgedBy` INT NULL,
   `acknowledgedAt` DATETIME(3) NULL,
   `resolvedBy` INT NULL,
@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS `deviceCommands` (
   `sensorValue` DECIMAL(8,2) NULL,
   `status` ENUM('PENDING','SENT','ACKED','FAILED','TIMEOUT') NOT NULL DEFAULT 'PENDING',
   `resultMessage` VARCHAR(255) NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `sentAt` DATETIME(3) NULL,
   `ackedAt` DATETIME(3) NULL,
   PRIMARY KEY (`id`),
@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS `auditLogs` (
   `entityId` INT NULL,
   `detail` JSON NULL,
   `success` TINYINT(1) NOT NULL DEFAULT 1,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   KEY `idx_auditLogs_userId` (`userId`),
   KEY `idx_auditLogs_createdAt` (`createdAt`),
@@ -258,7 +258,7 @@ CREATE TABLE IF NOT EXISTS `cameraTokens` (
   `tokenHash` CHAR(64) NOT NULL,
   `expiresAt` DATETIME(3) NULL,
   `revokedAt` DATETIME(3) NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `lastUsedAt` DATETIME(3) NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `cameraTokens_deviceId_unique` (`deviceId`),
@@ -282,11 +282,10 @@ CREATE TABLE IF NOT EXISTS `camera_media` (
   `sizeBytes` INT UNSIGNED NOT NULL,
   `sha256` CHAR(64) NOT NULL,
   `capturedAt` DATETIME(3) NULL,
-  `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+  `receivedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `camera_media_eventId_unique` (`eventId`),
   KEY `idx_camera_media_camera` (`cameraId`),
   KEY `idx_camera_media_captured` (`capturedAt`)
 ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC
   DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
